@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import csv
 import hashlib
 import hmac
+import io
 import json
 from pathlib import Path
 import re
@@ -16,7 +18,7 @@ from .normalization import search_key
 from .public_document import build_public_document
 from .labels import domain_label, grammar_label, status_label
 from .persistence import persistence_status, save_canonical_xml
-from .importer import import_xml
+from .importer import import_xml, _insert_senses
 from .xml_comparison import compare_xml_with_database, file_sha256
 
 XML_ID = "{http://www.w3.org/XML/1998/namespace}id"
@@ -718,6 +720,94 @@ class EditorialService:
             "facets": facets,
         }
 
+    def export_entries_csv(
+        self,
+        term: str,
+        *,
+        resource: str | None = None,
+        workflow_status: str | None = None,
+        grammar: str | None = None,
+        domain: str | None = None,
+        issue_rule: str | None = None,
+    ) -> bytes:
+        """Exporta a totalidade da seleção editorial, pela mesma lógica da pesquisa."""
+        normalized = search_key(term)
+        workflow_value = workflow_status.upper() if workflow_status else None
+        if resource and resource not in {"dictionary", "vocabulary"}:
+            raise EditorialError("Filtro resource inválido.")
+        if workflow_value and workflow_value not in WORKFLOW_STATES:
+            raise EditorialError("Filtro workflow_status inválido.")
+
+        with connect(self.db_path) as connection:
+            run = self._active_run(connection)
+            if run is None:
+                rows = []
+            else:
+                params: list[object] = [run["id"]]
+                conditions: list[str] = []
+                if normalized:
+                    conditions.append(
+                        "e.lemma_normalized >= ? AND e.lemma_normalized < ?"
+                    )
+                    params.extend((normalized, normalized + "\uffff"))
+                if resource:
+                    conditions.append("e.resource=?")
+                    params.append(resource)
+                if workflow_value:
+                    conditions.append("e.workflow_status=?")
+                    params.append(workflow_value)
+                if grammar:
+                    conditions.append("e.grammatical_info=?")
+                    params.append(grammar)
+                if domain:
+                    conditions.append(
+                        "e.id IN (SELECT entry_id FROM labels "
+                        "WHERE label_type IN ('domain','dom') AND value=?)"
+                    )
+                    params.append(domain)
+                if issue_rule:
+                    conditions.append(
+                        "e.id IN (SELECT entry_id FROM validation_issues WHERE rule_code=?)"
+                    )
+                    params.append(issue_rule)
+                condition = " AND " + " AND ".join(conditions) if conditions else ""
+                rows = connection.execute(
+                    f"""
+                    SELECT e.public_id,e.resource,e.lemma,e.grammatical_info,
+                           e.workflow_status,e.editorial_status,e.updated_at,
+                           (SELECT GROUP_CONCAT(value, ' | ') FROM labels l
+                             WHERE l.entry_id=e.id AND l.label_type IN ('domain','dom')) domains,
+                           (SELECT COUNT(*) FROM validation_issues vi
+                             WHERE vi.entry_id=e.id AND vi.severity='error') error_count,
+                           (SELECT COUNT(*) FROM validation_issues vi
+                             WHERE vi.entry_id=e.id AND vi.severity='warning') warning_count,
+                           (SELECT GROUP_CONCAT(rule_code, ' | ') FROM validation_issues vi
+                             WHERE vi.entry_id=e.id) problems
+                      FROM entries e
+                     WHERE e.import_run_id=? {condition}
+                     ORDER BY e.lemma_normalized,e.source_ordinal
+                    """,
+                    params,
+                ).fetchall()
+
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow((
+            "Identificador", "Recurso", "Lema", "Classe gramatical",
+            "Domínios", "Estado editorial", "Estado recebido no XML",
+            "Erros", "Avisos", "Problemas", "Última atualização",
+        ))
+        for row in rows:
+            writer.writerow((
+                row["public_id"],
+                "Dicionário" if row["resource"] == "dictionary" else "Vocabulário",
+                row["lemma"], row["grammatical_info"] or "", row["domains"] or "",
+                row["workflow_status"], row["editorial_status"] or "",
+                row["error_count"], row["warning_count"], row["problems"] or "",
+                row["updated_at"],
+            ))
+        return ("\ufeff" + output.getvalue()).encode("utf-8")
+
     def _cached_entry_facets(self, connection, run, **selected) -> dict:
         signature_row = connection.execute(
             """
@@ -1090,6 +1180,8 @@ class EditorialService:
             actor, {"editor", "reviewer", "approver", "administrator"}
         )
         comment = str(payload.get("comment") or "Edição editorial").strip()[:500]
+        if "raw_xml" in payload:
+            return self._replace_entry_xml(public_id, payload, actor, comment)
         with transaction(self.db_path) as connection:
             row = self._entry_row(connection, public_id)
             if row["workflow_status"] == "REMOVED":
@@ -1137,6 +1229,7 @@ class EditorialService:
             if not lemma:
                 raise EditorialError("O lema não pode ficar vazio.")
             root = ET.fromstring(row["raw_xml"])
+            self._update_xml_leaf_text(root, payload.get("xml_text_updates", []))
             orth = next((node for node in root.iter() if _local(node.tag) == "orth"), None)
             if orth is None:
                 raise EditorialError("O XML da entrada não contém <orth>.")
@@ -1225,6 +1318,175 @@ class EditorialService:
             },
         )
         return self.get_entry(public_id)
+
+    def _replace_entry_xml(
+        self, public_id: str, payload: dict, actor: str, comment: str
+    ) -> dict:
+        """Substitui uma entrada TEI e reconstrói todas as suas projeções editáveis."""
+        raw_input = str(payload.get("raw_xml") or "").strip()
+        if not raw_input:
+            raise EditorialError("O XML da entrada não pode ficar vazio.")
+        if len(raw_input.encode("utf-8")) > 5 * 1024 * 1024:
+            raise EditorialError("O XML da entrada ultrapassa o limite de 5 MB.")
+        try:
+            root = ET.fromstring(raw_input)
+        except ET.ParseError as exc:
+            raise EditorialError(f"O XML não está bem formado: {exc}.") from exc
+        if _local(root.tag) != "entry":
+            raise EditorialError("O elemento principal tem de ser <entry>.")
+        xml_public_id = root.get(XML_ID)
+        if xml_public_id != public_id:
+            raise EditorialError(
+                "O atributo xml:id não pode ser alterado neste editor."
+            )
+        orths = [node for node in root.iter() if _local(node.tag) == "orth"]
+        lemma = _text(orths[0]) if orths else ""
+        if not lemma:
+            raise EditorialError("A entrada tem de conter um lema em <orth>.")
+        grammar = next(
+            (_text(node) for node in root if _local(node.tag) == "gramGrp"), ""
+        ) or None
+        source_status = next(
+            (
+                node.get("status")
+                for node in root.iter()
+                if _local(node.tag) == "meta" and node.get("status")
+            ),
+            None,
+        )
+        resource = "vocabulary" if root.get("volp") == "only" else "dictionary"
+        raw_xml = _serialize(root)
+        raw_sha = hashlib.sha256(raw_xml.encode("utf-8")).hexdigest()
+
+        with transaction(self.db_path) as connection:
+            row = self._entry_row(connection, public_id)
+            if row["workflow_status"] == "REMOVED":
+                raise InvalidWorkflow(
+                    "Recupere a entrada apagada antes de a voltar a editar."
+                )
+            if row["workflow_status"] == "PUBLISHED":
+                raise InvalidWorkflow(
+                    "Na área Publicação, devolva primeiro a entrada para revisão."
+                )
+            expected = payload.get("expected_updated_at")
+            if expected and expected != row["updated_at"]:
+                raise EditConflict(
+                    "A entrada foi alterada depois de ser aberta. Recarregue-a antes de gravar."
+                )
+            snapshot = self._snapshot(connection, row)
+            old_domains = {
+                item["value"] for item in snapshot.get("labels", [])
+                if item.get("label_type") in {"domain", "dom"}
+            }
+            revision_no = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM revisions WHERE entry_id=?",
+                    (row["id"],),
+                ).fetchone()[0]
+            )
+            connection.execute(
+                """
+                INSERT INTO revisions(entry_id, revision_no, actor, comment, snapshot_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"], revision_no, actor, comment,
+                    json.dumps(snapshot, ensure_ascii=False),
+                ),
+            )
+            connection.execute("DELETE FROM relations WHERE entry_id=?", (row["id"],))
+            connection.execute("DELETE FROM labels WHERE entry_id=?", (row["id"],))
+            connection.execute("DELETE FROM senses WHERE entry_id=?", (row["id"],))
+            connection.execute("DELETE FROM forms WHERE entry_id=?", (row["id"],))
+            for position, orth in enumerate(orths, 1):
+                value = _text(orth)
+                if value:
+                    connection.execute(
+                        """
+                        INSERT INTO forms(
+                            entry_id, position, value, value_normalized, language, kind
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            row["id"], position, value, search_key(value),
+                            orth.get("{http://www.w3.org/XML/1998/namespace}lang"), None,
+                        ),
+                    )
+            _insert_senses(connection, row["id"], root, None, ())
+            now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            connection.execute(
+                """
+                UPDATE entries
+                   SET resource=?, lemma=?, lemma_normalized=?, grammatical_info=?,
+                       editorial_status=?, workflow_status='EDITED', workflow_actor=?,
+                       workflow_updated_at=?, raw_xml=?, raw_sha256=?, updated_at=?
+                 WHERE id=?
+                """,
+                (
+                    resource, lemma, search_key(lemma), grammar, source_status, actor,
+                    now, raw_xml, raw_sha, now, row["id"],
+                ),
+            )
+            self._validate(connection, row["id"], row["import_run_id"], root, lemma)
+            connection.execute(
+                """
+                INSERT INTO audit_events(
+                    event_type, actor, entry_id, previous_state,
+                    resulting_state, comment, details_json
+                ) VALUES ('ENTRY_EDIT', ?, ?, ?, 'EDITED', ?, ?)
+                """,
+                (
+                    actor, row["id"], row["workflow_status"], comment,
+                    json.dumps(
+                        {"revision_no": revision_no, "editor": "xml"},
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM publication_selections WHERE entry_id=?", (row["id"],)
+            )
+            new_domains = {
+                item["value"] for item in connection.execute(
+                    "SELECT value FROM labels WHERE entry_id=? AND label_type IN ('domain','dom')",
+                    (row["id"],),
+                )
+            }
+        refresh_controlled_values(
+            self.db_path,
+            {
+                "grammar": {row["grammatical_info"], grammar},
+                "editorial_status": {row["editorial_status"], source_status},
+                "domain": old_domains | new_domains,
+            },
+        )
+        with self._facet_index_lock:
+            self._facet_index = None
+        return self.get_entry(public_id)
+
+    @staticmethod
+    def _update_xml_leaf_text(root: ET.Element, updates: list[dict]) -> None:
+        """Atualiza texto de folhas TEI identificadas pelo caminho de elementos."""
+        for item in updates:
+            raw_path = str(item.get("path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                indexes = [int(value) for value in raw_path.split(".")]
+            except ValueError as exc:
+                raise EditorialError("Foi recebido um caminho XML inválido.") from exc
+            node = root
+            for index in indexes:
+                children = list(node)
+                if index < 0 or index >= len(children):
+                    raise EditorialError("A estrutura XML mudou; recarregue a entrada.")
+                node = children[index]
+            if list(node):
+                raise EditorialError("Só é possível editar diretamente elementos XML sem filhos.")
+            value = str(item.get("value") or "")
+            if len(value) > 100_000:
+                raise EditorialError("O texto de um elemento XML é demasiado extenso.")
+            node.text = value
 
     def set_workflow(
         self, public_id: str, target: str, *, actor: str, comment: str = "",

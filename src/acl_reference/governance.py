@@ -6,14 +6,30 @@ import json
 import xml.etree.ElementTree as ET
 
 from .editorial_db import connect, initialize, transaction
-from .labels import DOMAINS, GRAMMAR, STATUSES
+from .labels import DOMAINS, FUNDAMENTAL_VOCABULARY, GRAMMAR, STATUSES, USAGE_MARKS
 from .normalization import search_key
 
 
 CATALOGUES = {
     "grammar": GRAMMAR,
+    "geographic": {},
     "domain": DOMAINS,
+    "socioCultural": USAGE_MARKS,
+    "frequency": USAGE_MARKS,
+    "hint": {},
+    "fundamental_vocabulary": FUNDAMENTAL_VOCABULARY,
     "editorial_status": STATUSES,
+}
+LABEL_TYPES = {
+    "geographic": ("geographic",),
+    "domain": ("domain", "dom"),
+    "socioCultural": ("socioCultural",),
+    "frequency": ("frequency",),
+    "hint": ("hint",),
+    "fundamental_vocabulary": ("fundamental_vocabulary",),
+}
+PRESENCE_AUTHORIZED = {
+    "geographic", "socioCultural", "frequency", "hint", "fundamental_vocabulary"
 }
 TEI = "http://www.tei-c.org/ns/1.0"
 
@@ -27,6 +43,7 @@ def synchronize_controlled_values(db_path: str | Path) -> None:
         ).fetchone()
         if run is None:
             return
+        _backfill_fundamental_vocabulary(connection, run["id"])
         sources = {
             "grammar": (
                 """
@@ -46,6 +63,20 @@ def synchronize_controlled_values(db_path: str | Path) -> None:
                 """,
                 (run["id"],),
             ),
+            **{
+                category: (
+                    f"""
+                    SELECT labels.value, COUNT(*) AS usage_count FROM labels
+                      JOIN entries ON entries.id=labels.entry_id
+                     WHERE entries.import_run_id=?
+                       AND labels.label_type IN ({','.join('?' for _ in label_types)})
+                     GROUP BY labels.value
+                    """,
+                    (run["id"], *label_types),
+                )
+                for category, label_types in LABEL_TYPES.items()
+                if category != "domain"
+            },
             "editorial_status": (
                 """
                 SELECT editorial_status AS value, COUNT(*) AS usage_count
@@ -61,7 +92,9 @@ def synchronize_controlled_values(db_path: str | Path) -> None:
             for row in connection.execute(query, params):
                 value = row["value"]
                 label = catalogue.get(value)
-                default_status = "authorized" if label else "unmapped"
+                default_status = (
+                    "authorized" if label or category in PRESENCE_AUTHORIZED else "unmapped"
+                )
                 connection.execute(
                     """
                     INSERT INTO controlled_values(
@@ -100,16 +133,20 @@ def refresh_controlled_values(
                         "SELECT COUNT(*) FROM entries WHERE import_run_id=? AND editorial_status=?",
                         (run["id"], value),
                     ).fetchone()[0]
-                else:
+                elif category in LABEL_TYPES:
+                    label_types = LABEL_TYPES[category]
                     count = connection.execute(
-                        """
+                        f"""
                         SELECT COUNT(DISTINCT labels.entry_id) FROM labels
                         JOIN entries ON entries.id=labels.entry_id
-                        WHERE entries.import_run_id=? AND labels.label_type IN ('domain','dom')
+                        WHERE entries.import_run_id=?
+                          AND labels.label_type IN ({','.join('?' for _ in label_types)})
                           AND labels.value=?
                         """,
-                        (run["id"], value),
+                        (run["id"], *label_types, value),
                     ).fetchone()[0]
+                else:
+                    continue
                 label = CATALOGUES[category].get(value)
                 connection.execute(
                     """
@@ -119,7 +156,9 @@ def refresh_controlled_values(
                         usage_count=excluded.usage_count,
                         display_label=COALESCE(controlled_values.display_label,excluded.display_label)
                     """,
-                    (category, value, label, "authorized" if label else "unmapped", count),
+                    (category, value, label,
+                     "authorized" if label or category in PRESENCE_AUTHORIZED else "unmapped",
+                     count),
                 )
 
 
@@ -331,6 +370,10 @@ class GovernanceService:
                 connection, source["category"], source["value"], target["value"],
                 actor=actor,
             )
+            connection.execute(
+                "UPDATE controlled_values SET usage_count=usage_count+? WHERE id=?",
+                (source["usage_count"], target_id),
+            )
             connection.execute("DELETE FROM controlled_values WHERE id=?", (source_id,))
             connection.execute(
                 """
@@ -363,15 +406,19 @@ class GovernanceService:
                 "SELECT * FROM entries WHERE import_run_id=? AND editorial_status=?",
                 (run["id"], old),
             ).fetchall()
-        else:
+        elif category in LABEL_TYPES:
+            label_types = LABEL_TYPES[category]
             rows = connection.execute(
-                """
+                f"""
                 SELECT DISTINCT entries.* FROM entries JOIN labels ON labels.entry_id=entries.id
-                 WHERE entries.import_run_id=? AND labels.label_type IN ('domain','dom')
+                 WHERE entries.import_run_id=?
+                   AND labels.label_type IN ({','.join('?' for _ in label_types)})
                    AND labels.value=?
                 """,
-                (run["id"], old),
+                (run["id"], *label_types, old),
             ).fetchall()
+        else:
+            return 0
         for row in rows:
             root = ET.fromstring(row["raw_xml"])
             if category == "grammar":
@@ -389,14 +436,31 @@ class GovernanceService:
                 connection.execute(
                     "UPDATE entries SET editorial_status=? WHERE id=?", (new, row["id"])
                 )
-            else:
+            elif category == "fundamental_vocabulary":
                 for node in root.iter():
-                    if (_local(node.tag) == "usg" and node.get("type") in {"domain", "dom"}
+                    annotations = (node.get("ana") or "").split()
+                    if old in annotations:
+                        node.set("ana", " ".join(new if item == old else item for item in annotations))
+                connection.execute(
+                    """
+                    UPDATE labels SET value=?,value_normalized=?
+                     WHERE entry_id=? AND label_type='fundamental_vocabulary' AND value=?
+                    """,
+                    (new, search_key(new), row["id"], old),
+                )
+            else:
+                label_types = LABEL_TYPES[category]
+                for node in root.iter():
+                    if (_local(node.tag) == "usg" and node.get("type") in label_types
                             and "".join(node.itertext()).strip() == old):
                         node.text = new
                 connection.execute(
-                    "UPDATE labels SET value=?,value_normalized=? WHERE entry_id=? AND label_type IN ('domain','dom') AND value=?",
-                    (new, search_key(new), row["id"], old),
+                    f"""
+                    UPDATE labels SET value=?,value_normalized=?
+                     WHERE entry_id=?
+                       AND label_type IN ({','.join('?' for _ in label_types)}) AND value=?
+                    """,
+                    (new, search_key(new), row["id"], *label_types, old),
                 )
             raw_xml = ET.tostring(root, encoding="unicode", short_empty_elements=True)
             connection.execute(
@@ -409,6 +473,45 @@ class GovernanceService:
                 (raw_xml, hashlib.sha256(raw_xml.encode()).hexdigest(), actor, row["id"]),
             )
         return len(rows)
+
+
+def _backfill_fundamental_vocabulary(connection, run_id: int) -> None:
+    """Projeta anotações ``sense/@ana`` de bases criadas antes deste catálogo."""
+    projected = connection.execute(
+        """
+        SELECT 1 FROM labels JOIN entries ON entries.id=labels.entry_id
+         WHERE entries.import_run_id=? AND labels.label_type='fundamental_vocabulary'
+         LIMIT 1
+        """,
+        (run_id,),
+    ).fetchone()
+    if projected is not None:
+        return
+    rows = connection.execute(
+        """
+        SELECT senses.id AS sense_id,senses.entry_id,senses.raw_xml
+          FROM senses JOIN entries ON entries.id=senses.entry_id
+         WHERE entries.import_run_id=? AND senses.raw_xml LIKE '% ana=%'
+        """,
+        (run_id,),
+    )
+    inserts: list[tuple[int, int, str, str]] = []
+    for row in rows:
+        try:
+            sense = ET.fromstring(row["raw_xml"])
+        except ET.ParseError:
+            continue
+        for annotation in (sense.get("ana") or "").split():
+            inserts.append(
+                (row["entry_id"], row["sense_id"], annotation, search_key(annotation))
+            )
+    connection.executemany(
+        """
+        INSERT INTO labels(entry_id,sense_id,label_type,value,value_normalized)
+        VALUES (?,?,'fundamental_vocabulary',?,?)
+        """,
+        inserts,
+    )
 
 
 def _local(tag: str) -> str:

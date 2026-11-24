@@ -65,6 +65,16 @@ class ReferenceArchitectureTests(unittest.TestCase):
             hashlib.sha256(raw_xml.encode("utf-8")).hexdigest(), raw_sha
         )
 
+    def test_editorial_csv_exports_all_matching_entries(self):
+        import_xml(self.source, self.db)
+        service = EditorialService(self.db)
+        exported = service.export_entries_csv("cav", resource="dictionary").decode(
+            "utf-8-sig"
+        )
+        self.assertIn("Identificador,Recurso,Lema", exported)
+        self.assertIn("DLP-cavalo_1-teste,Dicionário,cavalo", exported)
+        self.assertNotIn("VOLP-exemplo_1-teste", exported)
+
     def test_working_data_dirty_indicator_and_explicit_xml_save(self):
         import_xml(self.source, self.db)
         self.assertFalse(persistence_status(self.db)["has_unsaved_changes"])
@@ -458,6 +468,7 @@ class ReferenceArchitectureTests(unittest.TestCase):
                 "lemma": "cavalo",
                 "grammatical_info": "nome masculino",
                 "editorial_status": "revisto",
+                "xml_text_updates": [{"path": "3.2.0", "value": "O cavalo galopou."}],
                 "senses": [
                     {
                         "id": original["senses"][0]["id"],
@@ -470,6 +481,7 @@ class ReferenceArchitectureTests(unittest.TestCase):
         self.assertEqual(changed["grammatical_info"], "nome masculino")
         self.assertEqual(len(changed["revisions"]), 1)
         self.assertIn("mamífero doméstico de teste", changed["raw_xml"])
+        self.assertIn("O cavalo galopou.", changed["raw_xml"])
         reviewed = service.set_workflow(
             "DLP-cavalo_1-teste", "REVIEWED", actor="revisor.demo"
         )
@@ -478,6 +490,43 @@ class ReferenceArchitectureTests(unittest.TestCase):
             "DLP-cavalo_1-teste", "VALIDATED", actor="aprovador.demo"
         )
         self.assertEqual(validated["workflow_status"], "VALIDATED")
+
+    def test_raw_xml_editor_adds_fields_and_rebuilds_projections(self):
+        import_xml(self.source, self.db)
+        service = EditorialService(self.db)
+        original = service.get_entry("DLP-cavalo_1-teste")
+        root = ET.fromstring(original["raw_xml"])
+        namespace = "{http://www.tei-c.org/ns/1.0}"
+        form = ET.Element(f"{namespace}form")
+        ET.SubElement(form, f"{namespace}orth").text = "cavalinho"
+        root.insert(2, form)
+        sense = ET.SubElement(
+            root,
+            f"{namespace}sense",
+            {"{http://www.w3.org/XML/1998/namespace}id": "DLP-cavalo_1-teste-nova", "n": "2"},
+        )
+        ET.SubElement(sense, f"{namespace}usg", {"type": "dom"}).text = "Hipismo"
+        ET.SubElement(sense, f"{namespace}def").text = "nova aceção adicionada"
+        ET.SubElement(sense, f"{namespace}xr").append(
+            ET.Element(f"{namespace}ref", {"type": "entry"})
+        )
+        next(node for node in sense.iter() if node.tag.endswith("ref")).text = "égua"
+        changed = service.update_entry(
+            original["public_id"],
+            {
+                "actor": "editor.demo",
+                "expected_updated_at": original["updated_at"],
+                "comment": "Adicionar campos pelo editor",
+                "raw_xml": ET.tostring(root, encoding="unicode"),
+            },
+        )
+        self.assertEqual(changed["workflow_status"], "EDITED")
+        self.assertEqual(len(changed["forms"]), len(original["forms"]) + 1)
+        self.assertEqual(len(changed["senses"]), len(original["senses"]) + 1)
+        self.assertIn("Hipismo", {item["value"] for item in changed["labels"]})
+        self.assertIn("égua", {item["target_text"] for item in changed["relations"]})
+        self.assertIn("nova aceção adicionada", changed["raw_xml"])
+        self.assertEqual(len(changed["revisions"]), 1)
 
     def test_roles_removal_and_recovery_follow_the_simplified_workflow(self):
         import_xml(self.source, self.db)
@@ -997,6 +1046,53 @@ class ReferenceArchitectureTests(unittest.TestCase):
         self.assertEqual(label, "Zoologia")
         self.assertIn(">Zoologia<", raw_xml)
         self.assertEqual(workflow, "EDITED")
+
+    def test_tei_usage_and_fundamental_annotations_become_controlled_lists(self):
+        source = self.root / "controlled-lists.xml"
+        source.write_text(
+            """<dic><entry xmlns="http://www.tei-c.org/ns/1.0"
+              xmlns:dacl="http://dacl.zbr.pt/annotations" xml:id="DLP-listas-1">
+              <dacl:meta status="validated"/><form><orth>listas</orth></form>
+              <gramGrp>n. f. pl.</gramGrp><sense ana="#level_easy">
+                <usg type="geographic">Lisboa</usg>
+                <usg type="domain">Gram.</usg>
+                <usg type="socioCultural">Fig.</usg>
+                <usg type="frequency">P. us.</usg>
+                <usg type="hint">uso especial</usg><def>teste</def>
+              </sense></entry></dic>""",
+            encoding="utf-8",
+        )
+        import_xml(source, self.db)
+        governance = GovernanceService(self.db)
+        expected = {
+            "geographic": "Lisboa",
+            "domain": "Gram.",
+            "socioCultural": "Fig.",
+            "frequency": "P. us.",
+            "hint": "uso especial",
+            "fundamental_vocabulary": "#level_easy",
+            "editorial_status": "validated",
+        }
+        for category, value in expected.items():
+            items = governance.list_values(category)
+            self.assertTrue(any(item["value"] == value for item in items), category)
+        fundamental = governance.list_values("fundamental_vocabulary")[0]
+        self.assertEqual(fundamental["display_label"], "fácil")
+        target = governance.create_value({
+            "actor": "revisor.demo", "category": "socioCultural",
+            "value": "Figurado", "display_label": "Figurado",
+        })
+        source_value = next(
+            item for item in governance.list_values("socioCultural")
+            if item["value"] == "Fig."
+        )
+        merged = governance.merge_values(
+            source_value["id"], target["id"], actor="revisor.demo"
+        )
+        self.assertEqual(merged["usage_count"], 1)
+        with sqlite3.connect(self.db) as connection:
+            raw_xml = connection.execute("SELECT raw_xml FROM entries").fetchone()[0]
+        self.assertIn('type="socioCultural">Figurado<', raw_xml)
 
     def test_selective_release_keeps_unselected_edits_out_of_public_data(self):
         import_xml(self.source, self.db)

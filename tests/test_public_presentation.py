@@ -1,7 +1,11 @@
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from acl_reference.public_compat import PublicCompatibilityService
 from acl_reference.public_document import parse_public_xml
+from acl_reference.services import ReleaseService
 
 
 SOURCE_XML = """<entry xmlns="http://www.tei-c.org/ns/1.0"
@@ -42,6 +46,29 @@ CASA_NOTES_XML = """<entry xmlns="http://www.tei-c.org/ns/1.0" xml:id="DLP-casa_
 
 
 class PublicPresentationTests(unittest.TestCase):
+    def test_random_entry_reads_the_active_release_without_large_search_offsets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "test-release"
+            release.mkdir()
+            (root / "ACTIVE_RELEASE").write_text("test-release", encoding="utf-8")
+            (release / "manifest.json").write_text(
+                json.dumps({"counts": {"entries": 1, "dictionary": 1, "vocabulary": 0}}),
+                encoding="utf-8",
+            )
+            (release / "dictionary.ndjson").write_text(
+                json.dumps({
+                    "source_id": "DLP-casa_1-teste", "resource": "dictionary",
+                    "lemma": "casa", "grammatical_categories": ["n. f."],
+                    "definitions_text": "habitação", "status": "published",
+                }, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            service = PublicCompatibilityService(None, ReleaseService(root))
+            selected = service.random_entry("DLP")
+            self.assertEqual(selected["xml_id"], "DLP-casa_1-teste")
+            self.assertEqual(selected["lemma"], "casa")
+
     def test_parser_preserves_lexicographic_scope_and_example_source(self):
         parsed = parse_public_xml(SOURCE_XML)
         self.assertEqual(parsed["syllabifications"], ["ca.sa"])

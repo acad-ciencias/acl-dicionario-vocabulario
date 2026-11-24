@@ -249,6 +249,15 @@ def _insert_senses(
             ),
         )
         sense_id = int(cursor.lastrowid)
+        for annotation in (sense.get("ana") or "").split():
+            connection.execute(
+                """
+                INSERT INTO labels(
+                    entry_id, sense_id, label_type, value, value_normalized
+                ) VALUES (?, ?, 'fundamental_vocabulary', ?, ?)
+                """,
+                (entry_id, sense_id, annotation, search_key(annotation)),
+            )
         for node in sense.iter():
             local = _local(node.tag)
             if local == "ref" and _text(node):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
@@ -135,6 +136,10 @@ class _EditorialHandler(BaseHTTPRequestHandler):
                 )
             if parsed.path == "/acl-logo.png":
                 return self._file("assets/acl-logo.png", "image/png", root=self.public_web_root)
+            if parsed.path == "/dlp-logo.png":
+                return self._file("assets/dlp-logo.png", "image/png", root=self.public_web_root)
+            if parsed.path == "/vocabulario-logo.png":
+                return self._file("assets/vocabulario-logo.png", "image/png", root=self.public_web_root)
             if parsed.path == "/health":
                 return self._json(HTTPStatus.OK, {"status": "ok", "mode": "editable"})
             if parsed.path == "/api/editorial/session":
@@ -211,6 +216,25 @@ class _EditorialHandler(BaseHTTPRequestHandler):
                         issue_rule=query.get("issue_rule", [None])[0],
                     ),
                 )
+            if parsed.path == "/api/editorial/entries.csv":
+                query = parse_qs(parsed.query)
+                body = self.service.export_entries_csv(
+                    query.get("q", [""])[0],
+                    resource=query.get("resource", [None])[0],
+                    workflow_status=query.get("workflow", [None])[0],
+                    grammar=query.get("grammar", [None])[0],
+                    domain=query.get("domain", [None])[0],
+                    issue_rule=query.get("issue_rule", [None])[0],
+                )
+                filename = f"entradas-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.csv"
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if parsed.path == "/api/editorial/publish/status":
                 return self._json(HTTPStatus.OK, self.jobs.status())
             if parsed.path == "/api/editorial/github-backup/status":

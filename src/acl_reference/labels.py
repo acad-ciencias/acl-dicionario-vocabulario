@@ -273,6 +273,12 @@ USAGE_MARKS = {
     "P. us.": "Pouco usado",
 }
 
+FUNDAMENTAL_VOCABULARY = {
+    "#level_plain": "claro",
+    "#level_easy": "fácil",
+    "#level_very_easy": "muito fácil",
+}
+
 
 def grammar_label(value: str | None) -> str | None:
     return _expanded(value, GRAMMAR)

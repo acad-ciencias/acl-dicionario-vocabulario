@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS editorial_users (
 
 CREATE TABLE IF NOT EXISTS controlled_values (
     id INTEGER PRIMARY KEY,
-    category TEXT NOT NULL CHECK (category IN ('grammar', 'domain', 'editorial_status')),
+    category TEXT NOT NULL,
     value TEXT NOT NULL,
     display_label TEXT,
     governance_status TEXT NOT NULL DEFAULT 'unmapped'
@@ -445,6 +445,7 @@ def _initialize_once(path: str | Path) -> None:
             connection.execute(
                 "ALTER TABLE controlled_values ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
             )
+        _migrate_controlled_values_categories(connection)
         connection.executemany(
             """
             INSERT INTO editorial_users(username, display_name, role)
@@ -496,6 +497,53 @@ def _initialize_once(path: str | Path) -> None:
             END;
             """
         )
+
+
+def _migrate_controlled_values_categories(connection: sqlite3.Connection) -> None:
+    """Remove a restrição antiga que admitia apenas três catálogos."""
+    table = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='controlled_values'"
+    ).fetchone()
+    if table is None or "CHECK (category IN" not in (table["sql"] or ""):
+        return
+    connection.execute("DROP INDEX IF EXISTS idx_controlled_values_category")
+    connection.execute("ALTER TABLE controlled_values RENAME TO controlled_values_legacy")
+    connection.execute(
+        """
+        CREATE TABLE controlled_values (
+            id INTEGER PRIMARY KEY,
+            category TEXT NOT NULL,
+            value TEXT NOT NULL,
+            display_label TEXT,
+            governance_status TEXT NOT NULL DEFAULT 'unmapped'
+                CHECK (governance_status IN ('authorized', 'obsolete', 'unmapped')),
+            replacement_value TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            usage_count INTEGER NOT NULL DEFAULT 0,
+            updated_by TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(category, value)
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO controlled_values(
+            id,category,value,display_label,governance_status,replacement_value,
+            sort_order,usage_count,updated_by,updated_at
+        )
+        SELECT id,category,value,display_label,governance_status,replacement_value,
+               sort_order,usage_count,updated_by,updated_at
+          FROM controlled_values_legacy
+        """
+    )
+    connection.execute("DROP TABLE controlled_values_legacy")
+    connection.execute(
+        """
+        CREATE INDEX idx_controlled_values_category
+            ON controlled_values(category, governance_status, value)
+        """
+    )
 
 
 @contextmanager

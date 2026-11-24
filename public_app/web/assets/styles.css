@@ -1813,3 +1813,67 @@ button.sense__number[aria-expanded="true"] {
     transition-duration: .01ms !important;
   }
 }
+
+/* Cabeçalho institucional inspirado na navegação oficial da ACL. */
+.site-header{top:0;background:#b05748;color:#fff;border:0;box-shadow:0 2px 8px rgba(48,25,20,.16)}
+.site-header__inner{min-height:112px;grid-template-columns:auto minmax(240px,1fr) auto;gap:28px}
+.acl-brand{color:#fff}.acl-brand__name{font-family:var(--sans);font-size:22px;font-weight:600;line-height:27px;text-transform:uppercase}
+.brand__logo{width:64px;height:64px;filter:none}
+.resource-logos{display:flex;min-width:0;align-items:center;gap:6px}
+.resource-logos>span{width:1px;height:58px;background:rgba(255,255,255,.42)}
+.resource-logos a{display:flex;align-items:center;padding:0;background:transparent;text-decoration:none}
+.resource-logos img{display:block;object-fit:contain}
+.resource-logos .vocabulary-logo{width:68px;max-height:72px;filter:invert(1) grayscale(1) contrast(2);mix-blend-mode:screen}
+.resource-logos .dictionary-logo{width:min(350px,27vw);max-height:76px;margin-left:-44px;filter:brightness(0) invert(1)}
+.site-header nav{gap:20px}.site-header nav a{padding-block:28px;color:#fff;font-family:var(--sans);font-size:1.08rem;font-weight:750;text-transform:uppercase}
+.site-header nav a::after{bottom:20px;background:#fff}
+
+/* Pesquisa e filtros formam um único bloco compacto em duas metades. */
+.hero{border-top:0;background:#fff}.hero__inner{padding-block:24px 18px}.hero__intro{margin-top:5px}
+.search-controls-panel{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:16px;border:1px solid var(--line-strong);background:#fff}
+.search-controls-panel__query{min-width:0;padding:13px 14px;border-right:1px solid var(--line)}
+.search-controls-panel .search-box{position:relative;min-height:50px;margin:0}
+.search-controls-panel .search-box input{padding:10px 15px;font-size:1.05rem}
+.search-controls-panel .search-box.has-random-search input{padding-bottom:21px}
+.random-search-label{position:absolute;left:16px;bottom:2px;z-index:1;color:var(--terracotta-deep);font-size:.61rem;font-style:italic;pointer-events:none}
+.random-search-label::before{content:"“"}.random-search-label::after{content:"”"}
+.search-controls-panel .search-box button{min-width:112px}
+.search-controls-panel .collection-tabs{margin-top:9px}.search-controls-panel .collection-tab{padding:7px 11px;font-size:.72rem}
+.search-controls-panel .filter-bar{display:flex;min-width:0;align-items:stretch;padding:13px 14px;border:0;background:#fff;box-shadow:none}
+.search-controls-panel .filters{width:100%;grid-template-columns:1fr 1fr;gap:8px 10px}
+.search-controls-panel .filters select{min-height:36px;padding-inline:9px 28px;font-size:.76rem}
+.search-controls-panel .filters label{gap:2px;font-size:.62rem}
+.search-controls-panel .filter-actions{grid-template-columns:1fr 1fr;align-items:center;gap:5px;min-height:36px}
+.search-controls-panel .clear-filters{min-height:36px;border:1px solid var(--line);font-size:.7rem}
+.search-workspace{padding-block:12px 70px}
+
+/* Separador arrastável entre a entrada e a lista de resultados. */
+.workspace-grid{--results-panel-width:340px;grid-template-columns:minmax(430px,1fr) 12px minmax(280px,var(--results-panel-width));gap:10px}
+.workspace-resizer{position:relative;align-self:stretch;min-height:360px;cursor:col-resize;touch-action:none;outline:0}
+.workspace-resizer::before{position:absolute;top:0;bottom:0;left:50%;width:2px;content:"";transform:translateX(-50%);background:var(--line-strong);transition:width .15s,background .15s}
+.workspace-resizer span{position:sticky;top:50vh;display:block;width:10px;height:42px;margin:auto;border:1px solid var(--line-strong);background:#fff}
+.workspace-resizer span::after{display:block;color:var(--terracotta);content:"⋮";font-size:19px;line-height:39px;text-align:center}
+.workspace-resizer:hover::before,.workspace-resizer:focus-visible::before,.is-resizing-workspace .workspace-resizer::before{width:4px;background:var(--terracotta)}
+.is-resizing-workspace{cursor:col-resize;user-select:none}
+.alphabet-guide{min-height:45px}.alphabet-guide strong{font-size:.76rem}
+
+/* Rodapé institucional com contactos e canais oficiais. */
+.site-footer{border-top:0;background:#e6e0d8;color:#1d1b1a}
+.site-footer__grid{grid-template-columns:minmax(240px,1.4fr) repeat(3,minmax(145px,.7fr));gap:28px;padding-block:34px;color:#3f3a36}
+.site-footer__grid>div{display:flex;align-items:flex-start}.footer__institution{align-items:center!important}.footer__contacts,.footer__links,.footer__social{flex-direction:column;gap:5px}
+.footer__contacts strong,.footer__links strong,.footer__social strong{margin-bottom:4px;color:#1d1b1a;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase}
+.footer__contacts a,.footer__links a,.footer__social a{color:#1d1b1a;font-size:.74rem;text-decoration:none}.footer__contacts a:hover,.footer__links a:hover,.footer__social a:hover{text-decoration:underline}
+.footer__social>div{display:flex;flex-wrap:wrap;gap:10px}.footer__logo{filter:none}
+
+@media(max-width:940px){
+  .site-header__inner{grid-template-columns:auto 1fr}.resource-logos{justify-self:end}.site-header nav{display:none}
+  .search-controls-panel{grid-template-columns:1fr}.search-controls-panel__query{border-right:0;border-bottom:1px solid var(--line)}
+  .workspace-grid{grid-template-columns:1fr;gap:20px}.workspace-resizer{display:none}.results-panel{order:-1}
+  .site-footer__grid{grid-template-columns:1fr 1fr}
+}
+@media(max-width:620px){
+  .site-header__inner{min-height:82px;gap:10px}.acl-brand__name{display:none}.brand__logo{width:48px;height:48px}.resource-logos{gap:4px}.resource-logos>span{height:36px}.resource-logos .dictionary-logo{width:145px;max-height:42px;margin-left:-13px}.resource-logos .vocabulary-logo{width:42px;max-height:48px}
+  .search-controls-panel .filters{grid-template-columns:1fr}.search-controls-panel .filter-toggle{display:flex}.search-controls-panel .filters{display:none;padding-top:9px}.search-controls-panel .filters.is-open{display:grid}
+  .search-controls-panel .collection-tabs{display:flex}.search-controls-panel .collection-tab{flex:1 1 auto;padding-inline:6px}
+  .site-footer__grid{grid-template-columns:1fr}
+}

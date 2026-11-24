@@ -4,6 +4,7 @@ import base64
 from dataclasses import dataclass
 import json
 import re
+import secrets
 from typing import Iterable
 
 from .meili import MeiliClient, MeiliError
@@ -46,6 +47,60 @@ class PublicCompatibilityService:
                 "VOCABULARIO": counts.get("vocabulary", 0),
             },
         }
+
+    def random_entry(self, collection: str | None = None) -> dict:
+        """Escolhe uma entrada pública ao acaso, ponderando o tamanho dos índices."""
+        counts = self.entry_counts()["collections"]
+        candidates = [
+            (COLLECTION_TO_INDEX[code], int(counts.get(code, 0)))
+            for code in (collection,) if code in COLLECTION_TO_INDEX
+        ] if collection else [
+            (COLLECTION_TO_INDEX[code], int(counts.get(code, 0)))
+            for code in ("DLP", "VOCABULARIO")
+        ]
+        candidates = [(index, count) for index, count in candidates if count > 0]
+        total = sum(count for _, count in candidates)
+        if not total:
+            raise MeiliError("Não existem entradas públicas disponíveis.")
+        position = secrets.randbelow(total)
+        index = candidates[-1][0]
+        offset = 0
+        for candidate, count in candidates:
+            if position < count:
+                index, offset = candidate, position
+                break
+            position -= count
+        current = self.releases.current(verify=False)
+        release_id = current.get("release_id")
+        if release_id:
+            path = self.releases.releases_root / release_id / f"{index}.ndjson"
+            if path.is_file() and path.stat().st_size:
+                with path.open("rb") as stream:
+                    stream.seek(secrets.randbelow(path.stat().st_size))
+                    if stream.tell():
+                        stream.readline()
+                    line = stream.readline()
+                    if not line:
+                        stream.seek(0)
+                        line = stream.readline()
+                if line:
+                    return self.entry_summary(json.loads(line))
+        # Compatibilidade com instalações antigas sem os NDJSON da release.
+        offset = min(offset, 999)
+        response = self.client.search_index(
+            index,
+            {
+                "q": "",
+                "limit": 1,
+                "offset": offset,
+                "sort": ["lemma_normalized:asc"],
+                "attributesToRetrieve": SUMMARY_ATTRIBUTES,
+            },
+        )
+        hits = response.get("hits", [])
+        if not hits:
+            raise MeiliError("Não foi possível escolher uma entrada pública.")
+        return self.entry_summary(hits[0])
 
     def global_facets(self) -> dict:
         return self._contextual_facets("", None, None, None, None)

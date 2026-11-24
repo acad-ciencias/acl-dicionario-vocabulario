@@ -143,6 +143,15 @@ class _Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/assets/acl-logo.png":
                 self._file("assets/acl-logo.png", "image/png", cache=True)
             elif parsed.path in {
+                "/assets/dlp-logo.png",
+                "/assets/vocabulario-logo.png",
+            }:
+                self._file(
+                    f"assets/{parsed.path.rsplit('/', 1)[-1]}",
+                    "image/png",
+                    cache=True,
+                )
+            elif parsed.path in {
                 "/assets/readability-muito-facil.png",
                 "/assets/readability-facil.png",
                 "/assets/readability-claro.png",
@@ -181,6 +190,14 @@ class _Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/facets":
                 self._json(
                     HTTPStatus.OK, self.compatibility.global_facets()
+                )
+            elif parsed.path == "/api/random-entry":
+                query = parse_qs(parsed.query)
+                self._json(
+                    HTTPStatus.OK,
+                    self.compatibility.random_entry(
+                        query.get("collection", [None])[0]
+                    ),
                 )
             elif parsed.path == "/api/entries":
                 self._legacy_search(parse_qs(parsed.query))

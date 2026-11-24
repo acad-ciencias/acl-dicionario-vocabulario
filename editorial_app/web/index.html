@@ -12,9 +12,9 @@
 </head>
 <body>
   <a class="skip-link" href="#conteudo">Saltar para o conteúdo</a>
-  <div class="institution-bar"><div class="shell institution-bar__inner"><a href="mailto:illlp@acad-ciencias.pt">illlp@acad-ciencias.pt</a><span>Instituto de Lexicologia e Lexicografia da Língua Portuguesa</span></div></div>
   <header class="site-header"><div class="shell site-header__inner">
-    <div class="brand"><a class="brand__logo-link" href="https://www.acad-ciencias.pt/" aria-label="Academia das Ciências de Lisboa"><img class="brand__logo" src="acl-logo.png" alt="Símbolo da Academia das Ciências de Lisboa"></a><a class="brand__title" href="./"><strong>Gestão editorial</strong><small>Dicionário e Vocabulário</small></a></div>
+    <div class="brand acl-brand"><a class="brand__logo-link" href="https://www.acad-ciencias.pt/" aria-label="Academia das Ciências de Lisboa"><img class="brand__logo" src="acl-logo.png" alt="Símbolo da Academia das Ciências de Lisboa"></a><span class="acl-brand__name">Academia das Ciências<br>de Lisboa</span></div>
+    <div class="resource-logos" aria-label="Dicionário da Língua Portuguesa e Vocabulário Ortográfico"><a href="../" aria-label="Vocabulário Ortográfico"><img class="vocabulary-logo" src="vocabulario-logo.png" alt="Vocabulário Ortográfico"></a><span aria-hidden="true"></span><a href="../" aria-label="Dicionário da Língua Portuguesa"><img class="dictionary-logo" src="dlp-logo.png" alt="Dicionário da Língua Portuguesa"></a><strong class="editorial-product-label">Gestão editorial</strong></div>
     <div class="editorial-header-tools">
       <div class="editorial-identity"><label for="current-user">Responsável pela operação</label><select id="current-user" aria-label="Responsável pela operação"></select><span id="role-indicator" class="role-indicator"></span></div>
       <div class="help-mode-control"><a id="help-guide" href="https://docs.google.com/document/d/1faitvIO3hH0ltHhxNtyyD7F9vWhKQAYOcKHRPFeMZVI/edit" target="_blank" rel="noreferrer">Ajuda</a><label class="toggle-switch" for="help-toggle"><input id="help-toggle" type="checkbox" role="switch" aria-label="Ativar ajuda contextual"><span class="toggle-switch__track" aria-hidden="true"></span><span id="help-toggle-state">Desativada</span></label></div>
@@ -33,8 +33,8 @@
     <section id="governance-panel" class="view active">
       <div class="section-heading"><div><p class="eyebrow">Governação dos dados</p><h1>Listas controladas</h1><p>Edite o valor ou a descrição completa. Se um valor ficar igual a outro, a aplicação propõe a união dos dois.</p></div><button id="add-controlled" type="button">Adicionar opção</button></div>
       <div class="governance-toolbar">
-        <label>Lista<select id="controlled-category"><option value="grammar">Classes gramaticais</option><option value="domain">Domínios</option></select></label>
-        <label>Ordenar por<select id="controlled-sort"><option value="alphabetical">Alfabeto</option><option value="usage">Quantidade de uso</option></select></label>
+        <label>Lista<select id="controlled-category"><option value="grammar">Classes gramaticais</option><option value="geographic">Etiquetas geográficas</option><option value="domain">Etiquetas de domínio</option><option value="socioCultural">Etiquetas socioculturais</option><option value="frequency">Etiquetas de frequência</option><option value="hint">Outras etiquetas</option><option value="fundamental_vocabulary">Anotações do Vocabulário Fundamental</option><option value="editorial_status">Estados editoriais</option></select><small id="controlled-category-description"></small></label>
+        <label>Ordenar por<select id="controlled-sort"><option value="alphabetical">Ordenação alfabética</option><option value="usage">Ordenação estatística</option></select></label>
         <label>Direção<select id="controlled-direction"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></label>
       </div>
       <div id="controlled-values" class="table-wrap"></div>
@@ -46,8 +46,9 @@
           <label><span>Recurso</span><select id="resource-filter"><option value="">Dicionário e Vocabulário</option></select></label><label><span>Estado editorial</span><select id="workflow-filter"><option value="">Todos</option></select></label><label><span>Classe gramatical</span><select id="grammar-filter"><option value="">Todas</option></select></label><label><span>Domínio</span><select id="domain-filter"><option value="">Todos</option></select></label><label><span>Problemas</span><select id="severity-filter"><option value="">Todos</option></select></label><button id="clear-filters" class="clear-filters clear-all" type="button">Limpar tudo</button>
         </div></div>
       </section>
-      <p id="status" class="workspace-meta" aria-live="polite"></p>
-      <div class="workspace-grid editorial-workspace"><aside class="results-panel"><div class="alphabet-guide"><div><strong>Explorar por letra inicial</strong><span id="alphabet-current">A mostrar entradas de todas as letras.</span></div><button id="alphabet-all" class="secondary compact" type="button">Ver todas</button></div><nav id="editorial-alphabet" class="alphabet-index" aria-label="Filtrar entradas pela letra inicial"></nav><div id="entries" class="results-list"></div><button id="load-more-editorial" class="load-more" type="button" hidden>Mostrar mais resultados</button></aside><article id="detail" class="entry-panel"><div class="entry-empty"><p>A carregar a primeira entrada…</p></div></article></div>
+      <div class="results-summary-toolbar"><p id="status" class="workspace-meta" aria-live="polite"></p><div class="results-actions"><button id="copy-results-link" class="secondary compact" type="button">Copiar ligação</button><a id="download-results-csv" class="button-link secondary compact" href="#">Descarregar CSV</a><button id="print-results" class="secondary compact" type="button">Gerar PDF</button></div></div>
+      <p id="results-snapshot-time" class="results-snapshot-time" hidden></p>
+      <div class="workspace-grid editorial-workspace"><article id="detail" class="entry-panel"><div class="entry-empty"><p>A carregar a primeira entrada…</p></div></article><aside class="results-panel"><div class="alphabet-guide"><div><strong>Explorar entradas</strong><span id="alphabet-current" class="sr-only">A mostrar entradas de todas as letras.</span></div><button id="alphabet-all" class="secondary compact" type="button">Ver todas</button></div><nav id="editorial-alphabet" class="alphabet-index" aria-label="Filtrar entradas pela letra inicial"></nav><div id="entries" class="results-list"></div><button id="load-more-editorial" class="load-more" type="button" hidden>Mostrar mais resultados</button></aside></div>
     </section>
 
     <section id="publication-panel" class="view">

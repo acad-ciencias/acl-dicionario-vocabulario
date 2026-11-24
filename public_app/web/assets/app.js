@@ -23,13 +23,15 @@
     results: document.querySelector("#results-list"),
     alphabet: document.querySelector("#alphabet-index"),
     alphabetGuide: document.querySelector("#alphabet-guide"),
-    alphabetCurrent: document.querySelector("#alphabet-current"),
     alphabetAll: document.querySelector("#alphabet-all"),
     loadMore: document.querySelector("#load-more"),
     entry: document.querySelector("#entry-panel"),
     countAll: document.querySelector("#count-all"),
     countDlp: document.querySelector("#count-dlp"),
     countVocabulary: document.querySelector("#count-vocabulary"),
+    randomLabel: document.querySelector("#random-search-label"),
+    workspace: document.querySelector(".workspace-grid"),
+    resizer: document.querySelector("#workspace-resizer"),
   };
 
   const state = {
@@ -90,7 +92,7 @@
     state.query = params.get("q") || "";
     els.input.value = state.query;
     if (!state.query) {
-      renderInitialState();
+      await loadRandomInitialEntry();
       return;
     }
     await runSearch({ selectFirst: true });
@@ -99,6 +101,7 @@
   function bindEvents() {
     els.form.addEventListener("submit", (event) => {
       event.preventDefault();
+      setRandomSearch(false);
       state.query = els.input.value.trim();
       state.offset = 0;
       updateSearchUrl();
@@ -106,6 +109,7 @@
     });
 
     els.input.addEventListener("input", () => {
+      setRandomSearch(false);
       window.clearTimeout(inputTimer);
       inputTimer = window.setTimeout(() => {
         const value = els.input.value.trim();
@@ -120,6 +124,7 @@
 
     els.collectionTabs.forEach((button) => {
       button.addEventListener("click", () => {
+        setRandomSearch(false);
         state.collection = button.dataset.collection || "";
         state.offset = 0;
         updateCollectionTabs();
@@ -153,6 +158,7 @@
       [els.status, "estado"],
     ].forEach(([select, filterName]) => {
       select.addEventListener("change", () => {
+        setRandomSearch(false);
         state.grammar = els.grammar.value;
         state.domain = els.domain.value;
         state.status = els.status.value;
@@ -175,6 +181,7 @@
     });
 
     els.clearFilters.addEventListener("click", () => {
+      setRandomSearch(false);
       state.grammar = "";
       state.domain = "";
       state.status = "";
@@ -191,6 +198,7 @@
     });
 
     els.clearAll.addEventListener("click", () => {
+      setRandomSearch(false);
       window.clearTimeout(inputTimer);
       state.query = "";
       state.collection = "";
@@ -248,6 +256,7 @@
     els.alphabet.addEventListener("click", (event) => {
       const button = event.target.closest("[data-letter]");
       if (!button) return;
+      setRandomSearch(false);
       state.query = "";
       els.input.value = "";
       state.browseStart = button.dataset.letter || "";
@@ -257,6 +266,7 @@
     });
 
     els.alphabetAll.addEventListener("click", () => {
+      setRandomSearch(false);
       state.query = "";
       els.input.value = "";
       state.browseStart = "";
@@ -286,6 +296,77 @@
         runSearch({ selectFirst: true });
       }
     });
+
+    bindWorkspaceResizer();
+  }
+
+  function setRandomSearch(active) {
+    els.randomLabel.hidden = !active;
+    els.form.classList.toggle("has-random-search", active);
+  }
+
+  async function loadRandomInitialEntry() {
+    try {
+      const params = new URLSearchParams();
+      if (state.collection) params.set("collection", state.collection);
+      const entry = await getJson(appUrl(`/api/random-entry${params.size ? `?${params}` : ""}`));
+      state.query = entry.lemma || "";
+      els.input.value = state.query;
+      setRandomSearch(true);
+      await runSearch({
+        selectFirst: true,
+        preferredEntryId: entry.xml_id,
+        usageEvent: null,
+        entrySource: "catalogue",
+      });
+    } catch {
+      setRandomSearch(false);
+      renderInitialState();
+    }
+  }
+
+  function bindWorkspaceResizer() {
+    if (!els.resizer || !els.workspace) return;
+    const saved = Number(sessionStorage.getItem("acl-results-panel-width"));
+    if (saved) setResultsPanelWidth(saved);
+    const resizeAt = (clientX) => {
+      const bounds = els.workspace.getBoundingClientRect();
+      setResultsPanelWidth(bounds.right - clientX);
+    };
+    els.resizer.addEventListener("pointerdown", (event) => {
+      if (window.matchMedia("(max-width: 940px)").matches) return;
+      els.resizer.setPointerCapture(event.pointerId);
+      document.body.classList.add("is-resizing-workspace");
+      resizeAt(event.clientX);
+    });
+    els.resizer.addEventListener("pointermove", (event) => {
+      if (els.resizer.hasPointerCapture(event.pointerId)) resizeAt(event.clientX);
+    });
+    const finish = (event) => {
+      if (els.resizer.hasPointerCapture(event.pointerId)) els.resizer.releasePointerCapture(event.pointerId);
+      document.body.classList.remove("is-resizing-workspace");
+    };
+    els.resizer.addEventListener("pointerup", finish);
+    els.resizer.addEventListener("pointercancel", finish);
+    els.resizer.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "Home") setResultsPanelWidth(340);
+      else {
+        const current = Number.parseFloat(getComputedStyle(els.workspace).getPropertyValue("--results-panel-width")) || 340;
+        setResultsPanelWidth(current + (event.key === "ArrowLeft" ? 30 : -30));
+      }
+    });
+    els.resizer.addEventListener("dblclick", () => setResultsPanelWidth(340));
+  }
+
+  function setResultsPanelWidth(value) {
+    const bounds = els.workspace.getBoundingClientRect();
+    const maximum = Math.max(280, Math.min(700, bounds.width - 430));
+    const width = Math.round(Math.max(280, Math.min(maximum, value)));
+    els.workspace.style.setProperty("--results-panel-width", `${width}px`);
+    els.resizer.setAttribute("aria-valuenow", String(width));
+    sessionStorage.setItem("acl-results-panel-width", String(width));
   }
 
   async function loadStatistics() {
@@ -314,6 +395,7 @@
     usageEvent = "search",
     changedFilter = null,
     entrySource = "search_results",
+    preferredEntryId = null,
   } = {}) {
     if (!state.query) {
       renderInitialState();
@@ -322,8 +404,8 @@
     state.browsing = false;
     state.browseCursor = null;
     state.browseStart = "";
-    els.alphabet.hidden = true;
-    els.alphabetGuide.hidden = true;
+    els.alphabet.hidden = false;
+    els.alphabetGuide.hidden = false;
     updateAlphabet();
     els.loadMore.textContent = "Mostrar mais resultados";
     if (state.searchController) state.searchController.abort();
@@ -377,10 +459,11 @@
       }
 
       if (selectFirst && data.items.length) {
-        await loadEntry(data.items[0].xml_id, {
+        const selected = data.items.find(item => item.xml_id === preferredEntryId) || data.items[0];
+        await loadEntry(selected.xml_id, {
           navigate: false,
           source: entrySource,
-          position: 1,
+          position: data.items.indexOf(selected) + 1,
         });
       } else if (!data.items.length && !append) {
         renderEmptyEntry("Sem resultados", "Experimente outra palavra ou remova alguns filtros.");
@@ -418,7 +501,7 @@
         ? `<p class="result-card__summary">${highlight(item.summary, state.query)}</p>`
         : "";
       return `
-        <button class="result-card ${workflow}${selected}" type="button" data-entry-id="${h(item.xml_id || "")}">
+        <button class="result-card ${workflow}${selected}" type="button" data-entry-id="${h(item.xml_id || "")}" data-entry-lemma="${h(item.lemma || "")}">
           <span class="result-card__top">
             <h3>${highlight(item.lemma || "(sem lema)", state.query)}</h3>
             <span class="result-card__source">${h(sourceLabel(item))}</span>
@@ -434,6 +517,9 @@
     els.results.querySelectorAll("[data-entry-id]").forEach((button) => {
       button.addEventListener("click", () => {
         const buttons = [...els.results.querySelectorAll("[data-entry-id]")];
+        state.query = button.dataset.entryLemma || state.query;
+        els.input.value = state.query;
+        setRandomSearch(false);
         loadEntry(button.dataset.entryId, {
           navigate: true,
           source: state.browsing
@@ -576,8 +662,8 @@
         previousSection = sense.section;
       }
       const labels = (sense.labels || []).map((label) =>
-        `<span class="usage-label">${h(fullLabel(label.label || label.value))}</span>`
-      ).join("");
+        fullLabel(label.label || label.value)
+      ).filter(Boolean).map(h).join("; ");
       const synonyms = (sense.synonyms || []).map((synonym) => {
         const value = synonym.value || "";
         const url = appUrl(`/?q=${encodeURIComponent(value)}`);
@@ -624,7 +710,7 @@
           ${numberMarkup}
           <div>
             <p class="sense__definition">
-              ${labels ? `<span class="sense__labels">${labels}</span>` : ""}
+              ${labels ? `<span class="sense__labels usage-label">${labels}:</span> ` : ""}
               ${renderLinkedText(
               sense.definition_segments,
               sense.definition || "[definição em preparação]"
@@ -1113,9 +1199,6 @@
       button.setAttribute("aria-current", active ? "true" : "false");
       button.setAttribute("aria-pressed", String(active));
     });
-    els.alphabetCurrent.textContent = state.browseStart
-      ? `A mostrar entradas começadas por ${state.browseStart}.`
-      : "A mostrar entradas de todas as letras.";
     els.alphabetAll.disabled = !state.browseStart;
   }
 

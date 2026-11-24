@@ -15,29 +15,22 @@
 <body>
   <a class="skip-link" href="#conteudo">Saltar para o conteúdo</a>
 
-  <div class="institution-bar">
-    <div class="shell institution-bar__inner">
-      <a href="mailto:illlp@acad-ciencias.pt">illlp@acad-ciencias.pt</a>
-      <span>Instituto de Lexicologia e Lexicografia da Língua Portuguesa</span>
-    </div>
-  </div>
-
   <header class="site-header">
     <div class="shell site-header__inner">
-      <div class="brand">
+      <div class="brand acl-brand">
         <a class="brand__logo-link" href="https://www.acad-ciencias.pt/"
            aria-label="Academia das Ciências de Lisboa" rel="noreferrer">
           <img class="brand__logo" src="assets/acl-logo.png"
                alt="Símbolo da Academia das Ciências de Lisboa">
         </a>
-        <a class="brand__title" href="./" aria-label="Página inicial">
-          <strong>Dicionário e Vocabulário</strong>
-          <small>Academia das Ciências de Lisboa</small>
-        </a>
+        <span class="acl-brand__name">Academia das Ciências<br>de Lisboa</span>
+      </div>
+      <div class="resource-logos" aria-label="Dicionário da Língua Portuguesa e Vocabulário Ortográfico">
+        <a href="./" aria-label="Vocabulário Ortográfico"><img class="vocabulary-logo" src="assets/vocabulario-logo.png" alt="Vocabulário Ortográfico"></a>
+        <span aria-hidden="true"></span>
+        <a href="https://dicionario.acad-ciencias.pt/" rel="noreferrer" aria-label="Dicionário da Língua Portuguesa"><img class="dictionary-logo" src="assets/dlp-logo.png" alt="Dicionário da Língua Portuguesa"></a>
       </div>
       <nav aria-label="Navegação principal">
-        <a href="dicionario" data-collection-link="DLP">Dicionário</a>
-        <a href="vocabulario" data-collection-link="VOCABULARIO">Vocabulário</a>
         <a href="https://www.acad-ciencias.pt/institutos/apresentacao-illp/" rel="noreferrer">ILLLP</a>
       </nav>
     </div>
@@ -46,56 +39,38 @@
   <main id="conteudo">
     <section class="hero">
       <div class="shell hero__inner">
-        <p class="eyebrow">Academia das Ciências de Lisboa</p>
         <h1>Consulte uma palavra</h1>
-        <p class="hero__intro">Pesquisa no Dicionário da Língua Portuguesa, no Vocabulário Ortográfico, ou em ambos.</p>
+        <p class="hero__intro">Pesquisa no Dicionário da Língua Portuguesa e no Vocabulário Ortográfico.</p>
 
-        <form class="search-box" id="search-form" role="search">
-          <label class="sr-only" for="search-input">Pesquisar palavra, forma ou conceito</label>
-          <input id="search-input" name="query" type="search" autocomplete="off"
-                 placeholder="Procure uma palavra">
-          <button type="submit" aria-label="Pesquisar"><span aria-hidden="true">⌕</span><span>Pesquisar</span></button>
-        </form>
-
-        <div class="collection-tabs" role="group" aria-label="Fonte lexical">
-          <button type="button" class="collection-tab is-active" data-collection="">
-            Todos <span id="count-all">—</span>
-          </button>
-          <button type="button" class="collection-tab" data-collection="DLP">
-            Dicionário <span id="count-dlp">—</span>
-          </button>
-          <button type="button" class="collection-tab" data-collection="VOCABULARIO">
-            Vocabulário <span id="count-vocabulary">—</span>
-          </button>
+        <div class="search-controls-panel">
+          <div class="search-controls-panel__query">
+            <form class="search-box" id="search-form" role="search">
+              <label class="sr-only" for="search-input">Pesquisar palavra, forma ou conceito</label>
+              <input id="search-input" name="query" type="search" autocomplete="off"
+                     placeholder="Procure uma palavra">
+              <span id="random-search-label" class="random-search-label" hidden>Pesquisa aleatória</span>
+              <button type="submit" aria-label="Pesquisar"><span aria-hidden="true">⌕</span><span>Pesquisar</span></button>
+            </form>
+            <div class="collection-tabs" role="group" aria-label="Fonte lexical">
+              <button type="button" class="collection-tab is-active" data-collection="">Todos <span id="count-all">—</span></button>
+              <button type="button" class="collection-tab" data-collection="DLP">Dicionário <span id="count-dlp">—</span></button>
+              <button type="button" class="collection-tab" data-collection="VOCABULARIO">Vocabulário <span id="count-vocabulary">—</span></button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filters">Filtros <span id="active-filter-count"></span></button>
+            <div class="filters" id="filters">
+              <label><span>Classe gramatical</span><select id="grammar-filter"><option value="">Todas as classes</option></select></label>
+              <label><span>Domínio</span><select id="domain-filter"><option value="">Todos os domínios</option></select></label>
+              <label><span>Estado editorial</span><select id="status-filter"><option value="">Todos os estados</option></select></label>
+              <div class="filter-actions"><button class="clear-filters" id="clear-filters" type="button">Limpar filtros</button><button class="clear-filters clear-all" id="clear-all" type="button">Limpar tudo</button></div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
     <section class="search-workspace shell" aria-live="polite">
-      <div class="filter-bar">
-        <button class="filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="filters">
-          Filtros <span id="active-filter-count"></span>
-        </button>
-        <div class="filters" id="filters">
-          <label>
-            <span>Classe gramatical</span>
-            <select id="grammar-filter"><option value="">Todas as classes</option></select>
-          </label>
-          <label>
-            <span>Domínio</span>
-            <select id="domain-filter"><option value="">Todos os domínios</option></select>
-          </label>
-          <label>
-            <span>Estado editorial</span>
-            <select id="status-filter"><option value="">Todos os estados</option></select>
-          </label>
-          <div class="filter-actions">
-            <button class="clear-filters" id="clear-filters" type="button">Limpar filtros</button>
-            <button class="clear-filters clear-all" id="clear-all" type="button">Limpar tudo</button>
-          </div>
-        </div>
-      </div>
-
       <div class="workspace-meta" id="workspace-meta" hidden>
         <p id="result-summary"></p>
       </div>
@@ -105,13 +80,12 @@
           <div class="entry-empty"><p>A carregar a primeira entrada…</p></div>
         </article>
 
+        <div id="workspace-resizer" class="workspace-resizer" role="separator" aria-label="Redimensionar os painéis" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="700" tabindex="0"><span aria-hidden="true"></span></div>
+
         <aside class="results-panel" aria-label="Resultados da pesquisa">
           <div class="alphabet-guide" id="alphabet-guide">
-            <div>
-              <strong>Explorar por letra inicial</strong>
-              <span id="alphabet-current">A mostrar entradas de todas as letras.</span>
-            </div>
-            <button id="alphabet-all" class="clear-filters" type="button">Ver todas</button>
+            <strong>Explorar entradas</strong>
+            <button id="alphabet-all" class="clear-filters" type="button">Todas</button>
           </div>
           <nav class="alphabet-index" id="alphabet-index"
                aria-label="Filtrar entradas pela letra inicial"></nav>
@@ -128,7 +102,7 @@
 
   <footer class="site-footer">
     <div class="shell site-footer__grid">
-      <div>
+      <div class="footer__institution">
         <a class="footer__logo-link" href="https://www.acad-ciencias.pt/"
            aria-label="Academia das Ciências de Lisboa" rel="noreferrer">
           <img class="footer__logo" src="assets/acl-logo.png"
@@ -136,11 +110,9 @@
         </a>
         <p>Academia das Ciências de Lisboa<br>Instituto de Lexicologia e Lexicografia da Língua Portuguesa</p>
       </div>
-      <p>Prova de conceito baseada no XML consolidado do DLP e do Vocabulário Ortográfico.<br>
-        <a class="footer__utility-link" href="dados">Dados e diagnóstico</a>
-        <span aria-hidden="true"> · </span>
-        <a class="footer__utility-link" href="estatisticas">Estatísticas de utilização</a>
-      </p>
+      <div class="footer__contacts"><strong>Contactos</strong><a href="mailto:illlp@acad-ciencias.pt">ILLLP — illlp@acad-ciencias.pt</a><a href="mailto:geral@acad-ciencias.pt">ACL — geral@acad-ciencias.pt</a><a href="https://dicionario.acad-ciencias.pt/contactos/" rel="noreferrer">Formulário de contacto</a></div>
+      <div class="footer__links"><strong>Informação</strong><a href="dados">Dados e diagnóstico</a><a href="estatisticas">Estatísticas de utilização</a></div>
+      <div class="footer__social"><strong>Siga a ACL</strong><div><a href="https://www.instagram.com/academia.ciencias.lisboa/" rel="noreferrer" aria-label="Instagram">Instagram</a><a href="https://www.facebook.com/academia.das.ciencias.de.lisboa" rel="noreferrer" aria-label="Facebook">Facebook</a><a href="https://twitter.com/acadcienciaslx" rel="noreferrer" aria-label="X / Twitter">X</a></div></div>
     </div>
   </footer>
 

@@ -8,13 +8,15 @@ let publicationItems = [];
 let publicationTimer = null;
 let backupTimer = null;
 let entryOffset = 0;
+let entryResultTotal = 0;
+let resultsGeneratedAt = "";
 let activeAlphabet = "";
 let xmlComparison = null;
 let comparedFileKey = "";
 let accessSession = {mode:"basic",read_only:false};
 let readOnlyAccess = false;
 let helpMode = localStorage.getItem("acl-editorial-help") === "on";
-const HELP_TARGET_SELECTOR = 'button:not(:disabled),a,select:not(:disabled),input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),summary,[role="button"]';
+const HELP_TARGET_SELECTOR = 'button:not(:disabled),a:not(.skip-link),select:not(:disabled),input:not([type="hidden"]):not(:disabled),textarea:not(:disabled),summary,[role="button"]';
 
 const HELP_TEXT_BY_ID = {
   "current-user": ["Seleciona a pessoa responsável pela operação e o respetivo perfil.", "Muda o responsável ativo; as permissões e os registos seguintes passam a usar essa conta."],
@@ -37,9 +39,14 @@ const HELP_TEXT_BY_ID = {
   "domain-filter": ["Filtra pelo domínio ou marca temática.", "Mostra apenas entradas associadas ao domínio escolhido."],
   "severity-filter": ["Filtra pelo tipo concreto de problema de validação.", "Mostra as entradas afetadas pela regra escolhida, por exemplo Falta de lema ou Relax NG inválido."],
   "clear-filters": ["Limpa a pesquisa e todos os filtros.", "Volta a mostrar o conjunto completo de entradas."],
+  "copy-results-link": ["Cria uma ligação direta para esta seleção de entradas.", "Copia um URL com a pesquisa, os filtros e a data de geração."],
+  "download-results-csv": ["Exporta todas as entradas da seleção atual.", "Descarrega um CSV com todos os resultados, não apenas os já carregados no ecrã."],
+  "print-results": ["Prepara uma versão imprimível da seleção visível.", "Abre a janela de impressão, onde pode guardar o documento como PDF."],
   "alphabet-all": ["Remove o filtro por letra inicial.", "Volta a apresentar entradas de todas as letras."],
   "load-more-editorial": ["Carrega o bloco seguinte de resultados.", "Acrescenta mais entradas ao fim da lista atual."],
-  "edit-entry": ["Abre o conteúdo da entrada em modo de edição.", "Substitui a leitura pelos campos editáveis, sem gravar nada automaticamente."],
+  "edit-entry-guided": ["Abre a estrutura TEI/XML com os valores editáveis.", "Permite alterar os valores mantendo a hierarquia e os elementos originais."],
+  "edit-entry-simple": ["Abre um formulário simplificado da entrada.", "Permite alterar e acrescentar campos sem precisar de conhecer XML."],
+  "edit-entry-xml": ["Abre o código TEI/XML completo da entrada.", "Permite acrescentar, remover ou reorganizar livremente os elementos XML."],
   "cancel-edit": ["Fecha o modo de edição.", "Descarta alterações ainda não gravadas e volta à leitura da entrada."],
   "select-visible": ["Seleciona as operações prontas atualmente visíveis.", "Adiciona essas entradas à próxima publicação; ainda não publica."],
   "unselect-visible": ["Retira da seleção as operações visíveis.", "Remove-as da próxima publicação sem alterar o seu estado de workflow."],
@@ -202,7 +209,7 @@ function populateUsers(users) {
   updateRoleIndicator();
 }
 function updateRoleIndicator() { const role = currentUser()?.role || ""; const node = $("#role-indicator"); node.textContent = readOnlyAccess ? "Consulta" : roleLabel(role); node.className = readOnlyAccess ? "role-indicator role-readonly" : `role-indicator role-${role}`; document.body.dataset.editorialRole = readOnlyAccess ? "readonly" : role; $("#add-controlled").disabled = readOnlyAccess || !["reviewer","approver","administrator"].includes(role); updateImportControls(); $("#publish-selected").disabled = readOnlyAccess || !["approver","administrator"].includes(role); if ($("#sync-github")) $("#sync-github").disabled = readOnlyAccess || !["approver","administrator"].includes(role); }
-function controlledLabel(category, value) { const item = overviewData?.controlled_options?.[category]?.find(option => option.value === value); return item?.display_label ? `${value} (${item.display_label})` : value; }
+function controlledLabel(category, value) { const item = overviewData?.controlled_options?.[category]?.find(option => option.value === value); if(!item?.display_label||item.display_label===value)return value; return category==="grammar"?`${item.display_label} (${value})`:`${value} (${item.display_label})`; }
 function countedSelect(selector, currentValues = [], globalValues = [], first, currentTotal, globalTotal, label = value => value, contextual = true) {
   const select = $(selector); const previous = select.value;
   const current = Object.fromEntries(currentValues.map(item => [item.value,Number(item.count)||0]));
@@ -332,9 +339,12 @@ $("#compare-xml").addEventListener("click",compareXml);
 $("#replace-corpus").addEventListener("click",replaceCorpus);
 
 // Listas controladas
+const CONTROLLED_CATEGORY_DESCRIPTIONS={grammar:"Valores de <gramGrp> no TEI/XML.",geographic:'Valores de <usg type="geographic"> no TEI/XML.',domain:'Valores de <usg type="domain"> no TEI/XML.',socioCultural:'Valores de <usg type="socioCultural"> no TEI/XML.',frequency:'Valores de <usg type="frequency"> no TEI/XML.',hint:'Valores de <usg type="hint"> no TEI/XML.',fundamental_vocabulary:'Anotações do atributo ana nas aceções <sense>.',editorial_status:'Valores do atributo status nos metadados editoriais do XML.'};
 ["#controlled-category","#controlled-sort","#controlled-direction"].forEach(selector => $(selector).addEventListener("change", loadControlledValues));
 async function loadControlledValues() {
-  const params = new URLSearchParams({category:$("#controlled-category").value,sort:$("#controlled-sort").value,direction:$("#controlled-direction").value});
+  const category=$("#controlled-category").value;
+  $("#controlled-category-description").textContent=CONTROLLED_CATEGORY_DESCRIPTIONS[category]||"";
+  const params = new URLSearchParams({category,sort:$("#controlled-sort").value,direction:$("#controlled-direction").value});
   try {
     const data = await api(`/api/editorial/controlled-values?${params}`); controlledValues = data.items;
     const locked = !readOnlyAccess && ["reviewer","approver","administrator"].includes(currentUser()?.role) ? "" : " disabled";
@@ -357,25 +367,54 @@ $("#add-controlled").addEventListener("click", async () => { const value = promp
 async function deleteControlledValue(id) { const item = controlledValues.find(value => value.id === id); if (!confirm(`Apagar “${item.value}”? Só é possível se não estiver em uso.`)) return; try { await api(`/api/editorial/controlled-values/${id}`, {method:"DELETE",body:JSON.stringify({actor:actor(),comment:"Remoção de valor controlado"})}); toast("Valor apagado."); loadControlledValues(); } catch (error) { toast(error.message,true); } }
 
 // Pesquisa, visualização pública e edição
-$("#search-form").addEventListener("submit", event => { event.preventDefault(); setActiveAlphabet(""); loadEntries(); });
-document.querySelectorAll("#entries-panel select").forEach(select => select.addEventListener("change", () => loadEntries()));
-$("#clear-filters").addEventListener("click", () => { $("#query").value = ""; setActiveAlphabet(""); document.querySelectorAll("#entries-panel select").forEach(select => { select.value = ""; }); loadEntries(); });
+const ENTRY_FILTERS = {"#resource-filter":"resource","#workflow-filter":"workflow","#grammar-filter":"grammar","#domain-filter":"domain","#severity-filter":"issue_rule"};
+function currentEntryParams({paging=false}={}) {
+  const params = new URLSearchParams();
+  const query = $("#query").value.trim();
+  if (query) params.set("q",query);
+  Object.entries(ENTRY_FILTERS).forEach(([selector,key])=>{if($(selector).value)params.set(key,$(selector).value);});
+  if (paging) { params.set("limit","100"); params.set("offset",String(entryOffset)); }
+  return params;
+}
+function updateResultsUrl({generated=false}={}) {
+  const params=currentEntryParams();
+  if(selectedId)params.set("entry",selectedId);
+  if(generated)resultsGeneratedAt=new Date().toISOString();
+  if(resultsGeneratedAt)params.set("generated_at",resultsGeneratedAt);
+  const url=new URL(window.location.href);url.search=params.toString();url.hash="entries-panel";
+  history.replaceState({},"",url);
+  const generatedAt=params.get("generated_at");
+  $("#results-snapshot-time").hidden=!generatedAt;
+  $("#results-snapshot-time").textContent=generatedAt?`Ligação gerada em ${formatDate(generatedAt)} · a lista reflete os dados atuais para estes critérios.`:"";
+  $("#download-results-csv").href=apiUrl(`/api/editorial/entries.csv?${currentEntryParams()}`);
+  return url;
+}
+function restoreEntryParams() {
+  const params=new URLSearchParams(window.location.search);
+  resultsGeneratedAt=params.get("generated_at")||"";
+  $("#query").value=params.get("q")||"";
+  Object.entries(ENTRY_FILTERS).forEach(([selector,key])=>{const value=params.get(key)||"";if([...$(selector).options].some(option=>option.value===value))$(selector).value=value;});
+  const query=$("#query").value;
+  setActiveAlphabet(query.length===1&&/^[a-z]$/i.test(query)?query.toLowerCase():"");
+}
+$("#search-form").addEventListener("submit", event => { event.preventDefault(); resultsGeneratedAt=""; setActiveAlphabet(""); loadEntries(); });
+document.querySelectorAll("#entries-panel select").forEach(select => select.addEventListener("change", () => {resultsGeneratedAt="";loadEntries();}));
+$("#clear-filters").addEventListener("click", () => { $("#query").value = ""; resultsGeneratedAt=""; setActiveAlphabet(""); document.querySelectorAll("#entries-panel select").forEach(select => { select.value = ""; }); loadEntries(); });
 async function loadEntries(append = false) {
   if (!append) entryOffset = 0;
-  $("#status").textContent = "A pesquisar…"; const params = new URLSearchParams({q:$("#query").value,limit:"100",offset:String(entryOffset)});
-  const filters = {"#resource-filter":"resource","#workflow-filter":"workflow","#grammar-filter":"grammar","#domain-filter":"domain","#severity-filter":"issue_rule"};
-  Object.entries(filters).forEach(([selector,key]) => { if ($(selector).value) params.set(key,$(selector).value); });
+  $("#status").textContent = "A pesquisar…"; const params = currentEntryParams({paging:true});
   try {
     const payload = await api(`/api/editorial/entries?${params}`);
     const markup = payload.items.map(item => {
       const missingLemma = !String(item.lemma || "").trim();
       const lemma = missingLemma ? "Entrada sem lema" : item.lemma;
       const issues = item.error_count ? `${n(item.error_count)} erros` : item.warning_count ? `${n(item.warning_count)} avisos` : "";
-      return `<button class="result-card ${workflowClass(item.workflow_status)}${item.public_id === selectedId ? " is-selected" : ""}" data-entry-id="${h(item.public_id)}"><span class="result-card__top"><h3 class="${missingLemma ? "is-missing-lemma" : ""}">${h(lemma)}</h3><span class="result-card__badges"><span class="result-card__source">${h(resourceLabel(item.resource))}</span><span class="result-card__state">${h(workflowEntryLabel(item))}</span></span></span><p class="result-card__grammar">${h(item.grammatical_info || "sem classificação")}</p>${issues ? `<small class="result-card__issues">${h(issues)}</small>` : ""}</button>`;
+      return `<button class="result-card ${workflowClass(item.workflow_status)}${item.public_id === selectedId ? " is-selected" : ""}" data-entry-id="${h(item.public_id)}"><span class="result-card__top"><h3 class="${missingLemma ? "is-missing-lemma" : ""}">${h(lemma)}</h3><span class="result-card__badges"><span class="result-card__source">${h(resourceLabel(item.resource))}</span><span class="result-card__state">${h(workflowEntryLabel(item))}</span></span></span><p class="result-card__grammar">${h(controlledLabel("grammar",item.grammatical_info)||"sem classificação")}</p>${issues ? `<small class="result-card__issues">${h(issues)}</small>` : ""}</button>`;
     }).join("");
     if (append) $("#entries").insertAdjacentHTML("beforeend",markup);
     else $("#entries").innerHTML = markup || `<div class="entry-empty"><p>Sem resultados.</p></div>`;
     entryOffset += payload.items.length;
+    entryResultTotal = payload.total;
     $("#status").textContent = `${n(payload.total)} resultados`;
     $("#load-more-editorial").hidden = entryOffset >= payload.total;
     renderEntryFacets(payload.facets,payload.total);
@@ -388,15 +427,19 @@ async function loadEntries(append = false) {
       selectedId=null; selectedEntry=null;
       $("#detail").innerHTML=`<div class="entry-empty"><h2>Sem resultados</h2><p>Remova alguns filtros ou altere a pesquisa.</p></div>`;
     }
+    if(!append)updateResultsUrl();
   } catch (error) { $("#status").textContent = error.message; }
 }
+$("#copy-results-link").addEventListener("click",async()=>{const url=updateResultsUrl({generated:true});try{await navigator.clipboard.writeText(url.href);toast("Ligação direta copiada.");}catch(error){prompt("Copie esta ligação:",url.href);}});
+$("#download-results-csv").addEventListener("click",event=>{if(!entryResultTotal){event.preventDefault();toast("Não existem resultados para exportar.",true);}});
+$("#print-results").addEventListener("click",()=>{updateResultsUrl({generated:true});document.body.classList.add("printing-results");requestAnimationFrame(()=>{window.print();setTimeout(()=>document.body.classList.remove("printing-results"),500);});});
 $("#load-more-editorial").addEventListener("click", () => loadEntries(true));
 $("#editorial-alphabet").innerHTML = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(letter => `<button type="button" data-letter="${letter.toLowerCase()}" aria-pressed="false" title="Mostrar entradas começadas por ${letter}">${letter}</button>`).join("");
 function setActiveAlphabet(letter) { activeAlphabet = letter; document.querySelectorAll("[data-letter]").forEach(node => { const active = node.dataset.letter === letter; node.classList.toggle("is-active",active); node.setAttribute("aria-pressed",String(active)); }); $("#alphabet-current").textContent = letter ? `A mostrar entradas começadas por ${letter.toUpperCase()}.` : "A mostrar entradas de todas as letras."; $("#alphabet-all").disabled = !letter; }
-document.querySelectorAll("[data-letter]").forEach(node => node.addEventListener("click", () => { $("#query").value = node.dataset.letter; setActiveAlphabet(node.dataset.letter); loadEntries(); }));
-$("#alphabet-all").addEventListener("click", () => { $("#query").value = ""; setActiveAlphabet(""); loadEntries(); });
+document.querySelectorAll("[data-letter]").forEach(node => node.addEventListener("click", () => { $("#query").value = node.dataset.letter; resultsGeneratedAt=""; setActiveAlphabet(node.dataset.letter); loadEntries(); }));
+$("#alphabet-all").addEventListener("click", () => { $("#query").value = ""; resultsGeneratedAt=""; setActiveAlphabet(""); loadEntries(); });
 setActiveAlphabet("");
-async function showEntry(id) { try { selectedId = id; selectedEntry = await api(`/api/editorial/entries/${encodeURIComponent(id)}`); renderPublicEntry(selectedEntry); document.querySelectorAll("[data-entry-id]").forEach(node => node.classList.toggle("is-selected",node.dataset.entryId===id)); } catch (error) { toast(error.message,true); } }
+async function showEntry(id) { try { selectedId = id; selectedEntry = await api(`/api/editorial/entries/${encodeURIComponent(id)}`); renderPublicEntry(selectedEntry); document.querySelectorAll("[data-entry-id]").forEach(node => node.classList.toggle("is-selected",node.dataset.entryId===id)); updateResultsUrl(); } catch (error) { toast(error.message,true); } }
 function renderPublicEntry(item) {
   const entry = item.public_view; const lexical = entry.lexical || {}; let previousSection = null; let index = 0;
   const imageMarkup = images => (images || []).length ? `<div class="entry-images">${images.map(image => `<figure><img src="${publicUrl(`entry-images/${encodeURIComponent(image.url || image.filename || image)}`)}" alt="${h(image.caption || entry.lemma || "Imagem da entrada")}" loading="lazy">${image.caption ? `<figcaption>${h(image.caption)}</figcaption>` : ""}</figure>`).join("")}</div>` : "";
@@ -419,16 +462,73 @@ function renderPublicEntry(item) {
   const editBlocked = ["REMOVED","PUBLISHED"].includes(item.workflow_status);
   const editTitle = item.workflow_status === "REMOVED" ? "Mude primeiro a entrada para um estado editável" : item.workflow_status === "PUBLISHED" ? "Mude primeiro a entrada para um estado editável" : "";
   const metadata = `<section class="entry-metadata" aria-label="Metadados da entrada"><h3>Metadados da entrada</h3><dl><div><dt>Origem</dt><dd>${h(resourceLabel(item.resource))}</dd></div><div><dt>Estado recebido no XML</dt><dd>${h(entry.source_status_label || entry.source_status || "Sem estado")}</dd></div></dl></section>`;
-  $("#detail").innerHTML = `${renderWorkflow(item,{mode:"view",editBlocked,editTitle})}${metadata}<header class="entry-header lexical-data-card"><span class="content-kicker">Conteúdo lexical</span><div class="entry-title-row"><h2 class="${missingLemma ? "is-missing-lemma" : ""}">${h(lemma)}</h2><span class="entry-grammar">${h(entry.grammatical_label || entry.grammatical_info || "")}</span></div>${missingLemma ? '<p class="missing-data-note">O campo do lema principal está vazio nesta entrada.</p>' : ""}${variants.length ? `<p class="entry-variants"><strong>Outras formas:</strong> ${h(variants.join(" · "))}</p>` : ""}</header><div class="lexical-content">${glosses ? `<section class="entry-section entry-gloss"><h3 class="entry-section__title">Enquadramento da entrada</h3>${glosses}</section>` : ""}${imageMarkup(lexical.images)}<section class="entry-section"><h3 class="entry-section__title">${senses ? `Aceções e definições <span>(${lexical.senses.length})</span>` : "Informação ortográfica"}</h3>${senses || "<p>Esta entrada não contém aceções lexicográficas.</p>"}</section>${references ? `<section class="entry-section"><h3 class="entry-section__title">Relações e remissões</h3><div class="reference-list">Ver também: ${references}</div></section>` : ""}${notes ? `<section class="entry-section"><h3 class="entry-section__title">Notas</h3>${notes}</section>` : ""}${etymology ? `<section class="entry-section"><h3 class="entry-section__title">Etimologia</h3>${etymology}</section>` : ""}</div>${renderIssues(item)}${renderDiagnostics(item)}${renderHistory(item)}`;
-  $("#edit-entry").addEventListener("click", () => renderEditEntry(item));
+  $("#detail").innerHTML = `${renderWorkflow(item,{mode:"view",editBlocked,editTitle})}${metadata}<header class="entry-header lexical-data-card"><span class="content-kicker">Conteúdo lexical</span><div class="entry-title-row"><h2 class="${missingLemma ? "is-missing-lemma" : ""}">${h(lemma)}</h2><span class="entry-grammar">${h(controlledLabel("grammar",item.grammatical_info)||entry.grammatical_label||entry.grammatical_info||"")}</span></div>${missingLemma ? '<p class="missing-data-note">O campo do lema principal está vazio nesta entrada.</p>' : ""}${variants.length ? `<p class="entry-variants"><strong>Outras formas:</strong> ${h(variants.join(" · "))}</p>` : ""}</header><div class="lexical-content">${glosses ? `<section class="entry-section entry-gloss"><h3 class="entry-section__title">Enquadramento da entrada</h3>${glosses}</section>` : ""}${imageMarkup(lexical.images)}<section class="entry-section"><h3 class="entry-section__title">${senses ? `Aceções e definições <span>(${lexical.senses.length})</span>` : "Informação ortográfica"}</h3>${senses || "<p>Esta entrada não contém aceções lexicográficas.</p>"}</section>${references ? `<section class="entry-section"><h3 class="entry-section__title">Relações e remissões</h3><div class="reference-list">Ver também: ${references}</div></section>` : ""}${notes ? `<section class="entry-section"><h3 class="entry-section__title">Notas</h3>${notes}</section>` : ""}${etymology ? `<section class="entry-section"><h3 class="entry-section__title">Etimologia</h3>${etymology}</section>` : ""}</div>${renderIssues(item)}${renderDiagnostics(item)}${renderHistory(item)}`;
+  $("#edit-entry-guided").addEventListener("click", () => renderEditEntry(item,"guided"));
+  $("#edit-entry-simple").addEventListener("click", () => renderEditEntry(item,"simple"));
+  $("#edit-entry-xml").addEventListener("click", () => renderEditEntry(item,"xml"));
   bindEntryActions(item);
 }
-function renderEditEntry(item) {
-  const grammarOptions = optionList(overviewData.controlled_options.grammar,item.grammatical_info);
-  $("#detail").innerHTML = `${renderWorkflow(item,{mode:"edit"})}<form id="edit-form" class="edit-form lexical-data-card"><span class="content-kicker">Edição do conteúdo lexical</span><div class="edit-grid"><label>Lema<input id="lemma" value="${h(item.lemma)}" required></label><label>Classe gramatical<select id="grammar">${grammarOptions}</select></label></div><h3>Formas e variantes (${item.forms.length})</h3><div class="editable-list">${item.forms.map(form => `<label class="inline-field">${h(form.kind || "Forma")}<input data-form-id="${form.id}" value="${h(form.value)}"></label>`).join("") || "<p>Sem formas.</p>"}</div><h3>Aceções e definições (${item.senses.length})</h3>${item.senses.map(sense => `<section class="sense-editor"><strong>Aceção ${h(sense.number_label || sense.position_path)}</strong><textarea data-sense-id="${sense.id}">${h(sense.definition || sense.gloss || "")}</textarea></section>`).join("")}<h3>Marcas e domínios (${item.labels.length})</h3><div class="editable-list">${item.labels.map(label => `<label class="inline-field">${h(label.label_type)}<input data-label-id="${label.id}" value="${h(label.value)}"></label>`).join("") || "<p>Sem valores.</p>"}</div><h3>Relações e remissões (${item.relations.length})</h3><div class="editable-list">${item.relations.map(relation => `<div class="inline-field"><input data-relation-text="${relation.id}" value="${h(relation.target_text || "")}"><input data-relation-target="${relation.id}" value="${h(relation.target_id || "")}" placeholder="Identificador"></div>`).join("") || "<p>Sem remissões.</p>"}</div><label>Nota da revisão<textarea id="comment"></textarea></label><div class="actions"><button type="submit">Gravar alterações</button><button id="reload-entry" class="secondary" type="button">Recarregar</button></div></form>${renderIssues(item)}${renderDiagnostics(item)}${renderHistory(item)}`;
-  $("#cancel-edit").addEventListener("click", () => renderPublicEntry(item)); $("#reload-entry").addEventListener("click", () => showEntry(item.public_id)); $("#edit-form").addEventListener("submit", event => saveEntry(event,item)); bindEntryActions(item);
+function xmlLocalName(node){return node.localName||String(node.nodeName||"").replace(/^.*:/,"");}
+function xmlAttributeName(attribute){if(attribute.name==="xmlns")return "xmlns";if(attribute.prefix)return `${attribute.prefix}:${attribute.localName}`;return attribute.name;}
+function renderTeiEditor(item) {
+  const documentXml=new DOMParser().parseFromString(item.raw_xml,"application/xml");
+  if(documentXml.querySelector("parsererror"))return `<div class="validation-issue"><strong>Não foi possível interpretar o XML</strong><p>Use os dados técnicos para inspecionar a entrada original.</p></div>`;
+  const forms=[...item.forms],senses=[...item.senses],labels=[...item.labels],relations=[...item.relations];
+  let formIndex=0,labelIndex=0,relationIndex=0;
+  const senseRows=new WeakMap();
+  [...documentXml.getElementsByTagName("*")].filter(node=>xmlLocalName(node)==="sense").forEach((node,index)=>{const publicId=node.getAttribute("xml:id")||node.getAttributeNS("http://www.w3.org/XML/1998/namespace","id");const row=senses.find(value=>value.public_id===publicId)||senses[index];if(row)senseRows.set(node,row);});
+  function attributes(node){return [...node.attributes].map(attribute=>` <span class="tei-attribute">${h(xmlAttributeName(attribute))}=<q>${h(attribute.value)}</q></span>`).join("");}
+  function directText(node){return [...node.childNodes].filter(child=>child.nodeType===Node.TEXT_NODE).map(child=>child.nodeValue.trim()).filter(Boolean).join(" ");}
+  function element(node,depth=0,parentSense=null,path=[]){
+    const name=xmlLocalName(node);const currentSense=name==="sense"?(senseRows.get(node)||parentSense):parentSense;
+    let editor="";let suppressText=false;
+    if(name==="orth") {const row=forms[formIndex++];if(row){const first=formIndex===1;editor=`<label class="tei-field"><span>Texto de &lt;orth&gt;</span><input ${first?'id="lemma" ':""}data-form-id="${row.id}" value="${h(row.value)}" required></label>`;suppressText=true;}}
+    else if(name==="gramGrp") {editor=`<label class="tei-field"><span>Valor de &lt;gramGrp&gt;</span><select id="grammar">${optionList(overviewData.controlled_options.grammar,item.grammatical_info)}</select></label>`;suppressText=true;}
+    else if((name==="def"||name==="gloss")&&currentSense&&node.parentElement===currentSenseNode(node)) {editor=`<label class="tei-field"><span>Texto de &lt;${name}&gt;</span><textarea data-sense-id="${currentSense.id}">${h(currentSense.definition||currentSense.gloss||directText(node))}</textarea></label>`;suppressText=true;}
+    else if(name==="usg"&&directText(node)){const row=labels[labelIndex++];if(row){editor=`<label class="tei-field"><span>Valor de &lt;usg&gt;</span><input data-label-id="${row.id}" value="${h(row.value)}"></label>`;suppressText=true;}}
+    else if(name==="ref"&&directText(node)){const row=relations[relationIndex++];if(row){editor=`<div class="tei-field tei-reference-field"><label><span>Texto de &lt;ref&gt;</span><input data-relation-text="${row.id}" value="${h(row.target_text||"")}"></label><label><span>Atributo target</span><input data-relation-target="${row.id}" value="${h(row.target_id||"")}" placeholder="Sem destino identificado"></label></div>`;suppressText=true;}}
+    if(!editor&&!node.children.length&&directText(node)){editor=`<label class="tei-field"><span>Texto de &lt;${h(name)}&gt;</span><textarea data-xml-text-path="${path.join(".")}">${h(directText(node))}</textarea></label>`;suppressText=true;}
+    const children=[...node.children].map((child,index)=>element(child,depth+1,currentSense,[...path,index])).join("");
+    const text=!suppressText&&directText(node)?`<div class="tei-text">${h(directText(node))}</div>`:"";
+    const empty=!children&&!text&&!editor;
+    return `<section class="tei-node tei-depth-${Math.min(depth,8)}"><div class="tei-tag">&lt;<strong>${h(name)}</strong>${attributes(node)}${empty?" /":""}&gt;</div>${empty?"":`<div class="tei-node__content">${editor}${text}${children}</div><div class="tei-tag tei-tag--closing">&lt;/<strong>${h(name)}</strong>&gt;</div>`}</section>`;
+  }
+  function currentSenseNode(node){let parent=node.parentElement;while(parent&&xmlLocalName(parent)!=="sense")parent=parent.parentElement;return parent;}
+  return `<div class="tei-editor"><div class="tei-editor__intro"><strong>Estrutura TEI/XML da entrada</strong><span>Os elementos aparecem pela mesma ordem e hierarquia do XML. Os campos brancos são editáveis; os atributos e os restantes nós preservam-se sem alteração.</span></div>${element(documentXml.documentElement)}</div>`;
 }
-function optionList(items, selected) { const values = [...items.map(item => item.value)]; if (selected && !values.includes(selected)) values.unshift(selected); return `<option value="">Sem valor</option>` + values.map(value => `<option value="${h(value)}"${value === selected ? " selected" : ""}>${h(value)}</option>`).join(""); }
+const TEI_NAMESPACE="http://www.tei-c.org/ns/1.0";
+const SIMPLE_FIELD_LABELS={orth:"Forma ou lema",pron:"Pronúncia",syll:"Divisão silábica",gramGrp:"Classe gramatical",def:"Definição",gloss:"Enquadramento ou definição",usg:"Domínio ou marca de uso",quote:"Exemplo",note:"Nota",etym:"Etimologia",ref:"Remissão",author:"Autor",title:"Obra",citedRange:"Página ou intervalo",lang:"Língua",figure:"Imagem"};
+function simpleFieldLabel(name,node){if(name==="usg"&&node.getAttribute("type")==="dom")return "Domínio";if(name==="ref")return "Remissão";return SIMPLE_FIELD_LABELS[name]||name.replace(/([A-Z])/g," $1").replace(/^./,letter=>letter.toLocaleUpperCase("pt-PT"));}
+function xmlNodeAtPath(root,rawPath){if(!rawPath)return root;return String(rawPath).split(".").reduce((node,value)=>node?.children?.[Number(value)],root);}
+function simpleFieldMarkup(field){const long=["def","gloss","quote","note","etym"].includes(field.name)||field.value.length>100;const control=field.name==="gramGrp"?`<select data-simple-text-path="${field.path}">${optionList(overviewData.controlled_options.grammar,field.value)}</select>`:long?`<textarea data-simple-text-path="${field.path}">${h(field.value)}</textarea>`:`<input data-simple-text-path="${field.path}" value="${h(field.value)}"${field.primary?' required':''}>`;return `<label class="simple-field"><span>${h(simpleFieldLabel(field.name,field.node))}<small>&lt;${h(field.name)}&gt;</small></span>${control}</label>`;}
+function renderSimpleEditor(item){
+  const documentXml=new DOMParser().parseFromString(item.raw_xml,"application/xml");
+  if(documentXml.querySelector("parsererror"))return `<div class="validation-issue"><strong>Não foi possível interpretar o XML</strong></div>`;
+  const entryFields=[];const senses=[];let firstOrth=true;
+  function walk(node,path=[],currentSense=null){const name=xmlLocalName(node);let group=currentSense;if(name==="sense"){group={path:path.join("."),number:node.getAttribute("n")||String(senses.length+1),xmlId:node.getAttribute("xml:id")||"",fields:[]};senses.push(group);}const children=[...node.children];const value=[...node.childNodes].filter(child=>child.nodeType===Node.TEXT_NODE).map(child=>child.nodeValue.trim()).filter(Boolean).join(" ");if(!children.length&&(value||["orth","gramGrp"].includes(name))){const field={name,node,path:path.join("."),value,primary:name==="orth"&&firstOrth};if(field.primary)firstOrth=false;(group?group.fields:entryFields).push(field);}children.forEach((child,index)=>walk(child,[...path,index],group));}
+  walk(documentXml.documentElement);
+  const entryOptions=`<option value="alternative_form">Forma alternativa</option><option value="pronunciation">Pronúncia</option><option value="syllabification">Divisão silábica</option><option value="note">Nota</option><option value="etymology">Etimologia</option><option value="gloss">Enquadramento</option>`;
+  const senseOptions=`<option value="definition">Definição</option><option value="domain">Domínio</option><option value="usage">Marca de uso</option><option value="example">Exemplo</option><option value="note">Nota</option><option value="reference">Remissão</option>`;
+  const addControl=(path,options,label)=>`<div class="simple-add-control"><select>${options}</select><button type="button" class="secondary compact" data-add-simple data-parent-path="${h(path)}">${h(label)}</button></div><div class="simple-additions"></div>`;
+  return `<div class="simple-editor"><div class="simple-editor__intro"><strong>Edição simples</strong><span>Altere os campos existentes ou acrescente novos campos sem escrever código XML. A estrutura TEI original é preservada.</span></div><section class="simple-editor__section"><h3>Dados da entrada</h3><div class="simple-fields">${entryFields.map(simpleFieldMarkup).join("")}</div>${addControl("",entryOptions,"Adicionar campo")}</section><section class="simple-editor__section"><div class="simple-section-heading"><h3>Aceções e definições</h3><button type="button" class="secondary compact" data-add-sense>Adicionar aceção</button></div>${senses.map(sense=>`<article class="simple-sense"><header><strong>Aceção ${h(sense.number)}</strong>${sense.xmlId?`<small>${h(sense.xmlId)}</small>`:""}</header><div class="simple-fields">${sense.fields.map(simpleFieldMarkup).join("")}</div>${addControl(sense.path,senseOptions,"Adicionar à aceção")}</article>`).join("")}<div id="new-senses" class="simple-additions"></div></section></div>`;
+}
+function appendSimpleField(button){const control=button.closest(".simple-add-control");const kind=control.querySelector("select").value;const labels={alternative_form:"Forma alternativa",pronunciation:"Pronúncia",syllabification:"Divisão silábica",note:"Nota",etymology:"Etimologia",gloss:"Enquadramento",definition:"Definição",domain:"Domínio",usage:"Marca de uso",example:"Exemplo",reference:"Remissão"};const long=["note","etymology","gloss","definition","example"].includes(kind);control.nextElementSibling.insertAdjacentHTML("beforeend",`<div class="simple-new-field" data-new-kind="${kind}" data-parent-path="${h(button.dataset.parentPath||"")}"><label><span>${h(labels[kind]||kind)} <small>Novo campo</small></span>${long?'<textarea required></textarea>':'<input required>'}</label><button type="button" class="remove-new-field" aria-label="Retirar este novo campo">×</button></div>`);}
+function appendSimpleSense(){const number=document.querySelectorAll(".simple-sense,.simple-new-sense").length+1;$("#new-senses").insertAdjacentHTML("beforeend",`<article class="simple-new-sense simple-new-field" data-new-kind="sense" data-parent-path=""><header><strong>Nova aceção</strong><button type="button" class="remove-new-field" aria-label="Retirar esta aceção">×</button></header><label><span>Número</span><input data-new-number value="${number}"></label><label><span>Definição</span><textarea required></textarea></label></article>`);}
+function buildSimpleXml(item){
+  const documentXml=new DOMParser().parseFromString(item.raw_xml,"application/xml");const root=documentXml.documentElement;
+  document.querySelectorAll("[data-simple-text-path]").forEach(field=>{const node=xmlNodeAtPath(root,field.dataset.simpleTextPath);if(node)node.textContent=field.value;});
+  const pending=[...document.querySelectorAll(".simple-new-field")].map(row=>({row,parent:xmlNodeAtPath(root,row.dataset.parentPath||"")}));
+  let generated=0;const element=name=>documentXml.createElementNS(TEI_NAMESPACE,name);const existingIds=new Set([...root.getElementsByTagName("*")].map(node=>node.getAttribute("xml:id")).filter(Boolean));const uniqueId=()=>{let value;do{generated++;value=`${item.public_id}-new-${generated}`;}while(existingIds.has(value));existingIds.add(value);return value;};
+  pending.forEach(({row,parent})=>{if(!parent)return;const kind=row.dataset.newKind;const value=(row.querySelector("textarea")||row.querySelector("input:not([data-new-number])"))?.value.trim()||"";if(kind==="alternative_form"){const form=element("form");const orth=element("orth");orth.textContent=value;form.append(orth);const before=[...root.children].find(node=>["gramGrp","sense"].includes(xmlLocalName(node)));root.insertBefore(form,before||null);}else if(kind==="pronunciation"||kind==="syllabification"){let form=[...root.children].find(node=>xmlLocalName(node)==="form");if(!form){form=element("form");root.append(form);}const node=element(kind==="pronunciation"?"pron":"syll");node.textContent=value;form.append(node);}else if(kind==="sense"){const sense=element("sense");sense.setAttribute("n",row.querySelector("[data-new-number]").value.trim()||String(generated+1));sense.setAttributeNS("http://www.w3.org/XML/1998/namespace","xml:id",uniqueId());const def=element("def");def.textContent=value;sense.append(def);root.append(sense);}else{let node;if(kind==="example"){node=element("cit");node.setAttribute("type","example");const quote=element("quote");quote.textContent=value;node.append(quote);}else if(kind==="reference"){node=element("xr");const ref=element("ref");ref.setAttribute("type","entry");ref.textContent=value;node.append(ref);}else{const names={note:"note",etymology:"etym",gloss:"gloss",definition:"def",domain:"usg",usage:"usg"};node=element(names[kind]||kind);if(kind==="domain")node.setAttribute("type","dom");if(kind==="usage")node.setAttribute("type","usage");node.textContent=value;}parent.append(node);}});
+  return new XMLSerializer().serializeToString(root);
+}
+function renderEditEntry(item,mode="guided") {
+  const guided=mode==="guided";const simple=mode==="simple";const editor=guided?renderTeiEditor(item):simple?renderSimpleEditor(item):`<div class="raw-xml-editor"><div><strong>Edição completa do XML</strong><span>Pode acrescentar, remover ou reorganizar qualquer elemento TEI. O xml:id da entrada tem de permanecer igual.</span></div><textarea id="raw-xml-editor" spellcheck="false">${h(item.raw_xml)}</textarea></div>`;
+  $("#detail").innerHTML = `${renderWorkflow(item,{mode:"edit"})}<form id="edit-form" class="edit-form lexical-data-card"><div class="editor-mode-switch" role="tablist" aria-label="Modo de edição"><button type="button" class="${guided?'is-active':'secondary'}" data-editor-mode="guided">Editar valores</button><button type="button" class="${simple?'is-active':'secondary'}" data-editor-mode="simple">Edição simples</button><button type="button" class="${mode==='xml'?'is-active':'secondary'}" data-editor-mode="xml">Editar XML completo</button></div>${editor}<label class="revision-comment">Nota da revisão<textarea id="comment"></textarea></label><div class="actions"><button type="submit">Gravar alterações</button><button id="reload-entry" class="secondary" type="button">Recarregar</button></div></form>${renderIssues(item)}${renderDiagnostics(item)}${renderHistory(item)}`;
+  $("#cancel-edit").addEventListener("click", () => renderPublicEntry(item));$("#reload-entry").addEventListener("click", () => showEntry(item.public_id));document.querySelectorAll("[data-editor-mode]").forEach(node=>node.addEventListener("click",()=>{if(node.dataset.editorMode!==mode&&confirm("Mudar de modo? As alterações ainda não gravadas serão perdidas."))renderEditEntry(item,node.dataset.editorMode);}));document.querySelectorAll("[data-add-simple]").forEach(node=>node.addEventListener("click",()=>appendSimpleField(node)));document.querySelectorAll("[data-add-sense]").forEach(node=>node.addEventListener("click",appendSimpleSense));$("#edit-form").addEventListener("click",event=>{const button=event.target.closest(".remove-new-field");if(button)button.closest(".simple-new-field").remove();});$("#edit-form").addEventListener("submit",event=>guided?saveEntry(event,item):saveXmlEntry(event,item,simple));bindEntryActions(item);
+}
+async function saveXmlEntry(event,item,simple){event.preventDefault();const submit=event.submitter;submit.disabled=true;try{const rawXml=simple?buildSimpleXml(item):$("#raw-xml-editor").value;const updated=await api(`/api/editorial/entries/${encodeURIComponent(item.public_id)}`,{method:"PATCH",body:JSON.stringify({expected_updated_at:item.updated_at,actor:actor(),comment:$("#comment").value,raw_xml:rawXml})});selectedEntry=updated;renderPublicEntry(updated);toast("Alterações gravadas; a entrada passou para Editada.");await Promise.all([loadOverview(),loadEntries()]);}catch(error){toast(error.message,true);}finally{submit.disabled=false;}}
+function optionList(items, selected) { const options=[...items]; if(selected&&!options.some(item=>item.value===selected))options.unshift({value:selected,display_label:null}); return `<option value="">Sem valor</option>`+options.map(item=>{const label=item.display_label&&item.display_label!==item.value?`${item.display_label} (${item.value})`:item.value;return `<option value="${h(item.value)}"${item.value===selected?" selected":""}>${h(label)}</option>`;}).join(""); }
 function workflowTargets(status) { if(readOnlyAccess)return []; const role=currentUser()?.role === "administrator" ? "approver" : currentUser()?.role; const targets={editor:["DRAFT","EDITED","REMOVED"],reviewer:["DRAFT","EDITED","REVIEWED","NEEDS_REVISION","REMOVED"],approver:["DRAFT","EDITED","REVIEWED","NEEDS_REVISION","VALIDATED","REMOVED"]}; return (targets[role]||[]).filter(target=>target!==status); }
 function workflowActionLabel(target) { return {DRAFT:"Em preparação",EDITED:"Editar",REVIEWED:"Rever editorialmente",NEEDS_REVISION:"Precisa de revisão",VALIDATED:"Validar",PUBLISHED:"Publicada",REMOVED:"Apagar"}[target] || workflowLabel(target); }
 function renderWorkflow(item, options = {}) {
@@ -449,14 +549,14 @@ function renderWorkflow(item, options = {}) {
   const publishedNote = item.workflow_status === "PUBLISHED" ? '<p class="workflow-lifecycle__note">Para alterar o conteúdo, mude primeiro a entrada para um dos estados editáveis permitidos pelo seu perfil.</p>' : "";
   const modeAction = readOnlyAccess ? "" : options.mode === "edit"
     ? '<button id="cancel-edit" class="secondary" type="button">Sair da edição</button>'
-    : `<button id="edit-entry" type="button"${options.editBlocked ? " disabled" : ""}${options.editTitle ? ` title="${h(options.editTitle)}"` : ""}>Editar conteúdo</button>`;
+    : `<div class="entry-edit-actions"><button id="edit-entry-guided" type="button"${options.editBlocked ? " disabled" : ""}${options.editTitle ? ` title="${h(options.editTitle)}"` : ""}>Editar valores</button><button id="edit-entry-simple" class="secondary" type="button"${options.editBlocked ? " disabled" : ""}${options.editTitle ? ` title="${h(options.editTitle)}"` : ""}>Edição simples</button><button id="edit-entry-xml" class="secondary" type="button"${options.editBlocked ? " disabled" : ""}${options.editTitle ? ` title="${h(options.editTitle)}"` : ""}>Editar XML completo</button></div>`;
   return `<section class="workflow-lifecycle entry-metadata" aria-label="Ciclo de vida desta entrada"><div class="workflow-lifecycle__heading"><div><span class="eyebrow">Ciclo de vida desta entrada</span><span class="entry-technical-id"><strong>Identificador técnico</strong> ${h(item.public_id)}</span></div><div class="workflow-lifecycle__context"><span>Perfil ativo: <strong>${h(roleLabel(role))}</strong></span>${modeAction}</div></div><div class="workflow-track">${primary.map(state=>stateButton(state)).join("")}</div><div class="workflow-alternatives"><span>Ações alternativas</span>${alternatives.map(state=>stateButton(state,true)).join("")}</div>${!availableCount&&!publishedNote?'<p class="workflow-lifecycle__note">Este perfil não tem transições disponíveis para o estado atual.</p>':publishedNote}</section>`;
 }
 function renderIssues(item) { return `<div class="issues">${item.validation_issues.map(issue => `<div class="validation-issue"><strong>${h(issue.severity.toUpperCase())} · ${h(issue.rule_code)}</strong><p>${h(issue.message)}</p>${issue.waiver ? `<small>Dispensado por ${h(issue.waiver.actor)}: ${h(issue.waiver.reason)}</small>` : issue.severity === "error" ? `<button class="secondary compact" type="button" data-waive="${h(issue.rule_code)}">Dispensar com justificação</button>` : ""}</div>`).join("")}</div>`; }
 function renderDiagnostics(item) { const projection = {...item}; delete projection.raw_xml; delete projection.revisions; return `<details class="technical-details"><summary>Identificação e metadados técnicos</summary><div class="diagnostic-grid"><pre>${h(JSON.stringify(projection,null,2))}</pre><pre>${h(item.raw_xml)}</pre></div></details>`; }
 function renderHistory(item) { return `<details class="history-details"><summary>Histórico e auditoria (${item.revisions.length + item.audit_events.length})</summary><ol class="revisions">${item.revisions.map(rev => `<li>#${rev.revision_no} · ${h(rev.actor || "sem autor")} · ${h(rev.comment || "sem nota")} <button class="secondary compact" data-restore="${rev.revision_no}">Repor</button></li>`).join("")}${item.audit_events.map(event => `<li>${h(event.event_type)} · ${h(event.actor)} · ${h(event.previous_state || "—")} → ${h(event.resulting_state || "—")}</li>`).join("")}</ol></details>`; }
 function bindEntryActions(item) { document.querySelectorAll("[data-workflow]").forEach(node => node.addEventListener("click", () => changeWorkflow(item.public_id,node.dataset.workflow))); document.querySelectorAll("[data-restore]").forEach(node => node.addEventListener("click", () => restoreRevision(item.public_id,Number(node.dataset.restore)))); document.querySelectorAll("[data-waive]").forEach(node => node.addEventListener("click", () => waiveIssue(item.public_id,node.dataset.waive))); }
-async function saveEntry(event,item) { event.preventDefault(); const submit = event.submitter; submit.disabled = true; try { const updated = await api(`/api/editorial/entries/${encodeURIComponent(item.public_id)}`,{method:"PATCH",body:JSON.stringify({expected_updated_at:item.updated_at,actor:actor(),comment:$("#comment").value,lemma:$("#lemma").value,grammatical_info:$("#grammar").value,forms:[...document.querySelectorAll("[data-form-id]")].map(node => ({id:Number(node.dataset.formId),value:node.value})),senses:[...document.querySelectorAll("[data-sense-id]")].map(node => ({id:Number(node.dataset.senseId),definition:node.value})),labels:[...document.querySelectorAll("[data-label-id]")].map(node => ({id:Number(node.dataset.labelId),value:node.value})),relations:[...document.querySelectorAll("[data-relation-text]")].map(node => ({id:Number(node.dataset.relationText),target_text:node.value,target_id:document.querySelector(`[data-relation-target="${node.dataset.relationText}"]`).value}))})}); selectedEntry=updated; renderPublicEntry(updated); toast("Alterações gravadas; a entrada passou para Editada."); await Promise.all([loadOverview(),loadEntries()]); } catch(error){toast(error.message,true);} finally{submit.disabled=false;} }
+async function saveEntry(event,item) { event.preventDefault(); const submit = event.submitter; submit.disabled = true; try { const updated = await api(`/api/editorial/entries/${encodeURIComponent(item.public_id)}`,{method:"PATCH",body:JSON.stringify({expected_updated_at:item.updated_at,actor:actor(),comment:$("#comment").value,lemma:$("#lemma").value,grammatical_info:$("#grammar").value,forms:[...document.querySelectorAll("[data-form-id]")].map(node => ({id:Number(node.dataset.formId),value:node.value})),senses:[...document.querySelectorAll("[data-sense-id]")].map(node => ({id:Number(node.dataset.senseId),definition:node.value})),labels:[...document.querySelectorAll("[data-label-id]")].map(node => ({id:Number(node.dataset.labelId),value:node.value})),relations:[...document.querySelectorAll("[data-relation-text]")].map(node => ({id:Number(node.dataset.relationText),target_text:node.value,target_id:document.querySelector(`[data-relation-target="${node.dataset.relationText}"]`).value})),xml_text_updates:[...document.querySelectorAll("[data-xml-text-path]")].map(node=>({path:node.dataset.xmlTextPath,value:node.value}))})}); selectedEntry=updated; renderPublicEntry(updated); toast("Alterações gravadas; a entrada passou para Editada."); await Promise.all([loadOverview(),loadEntries()]); } catch(error){toast(error.message,true);} finally{submit.disabled=false;} }
 async function changeWorkflow(id,target) { let confirmed=false; if(target==="REMOVED"){if(!confirm("A entrada será marcada como apagada e deixará de ser exportada e publicada. Pretende continuar?"))return;if(!confirm("Segunda confirmação: apagar esta entrada?"))return;confirmed=true;} try { const item=await api(`/api/editorial/entries/${encodeURIComponent(id)}/workflow`,{method:"POST",body:JSON.stringify({target,actor:actor(),confirmed,comment:""})}); selectedEntry=item; renderPublicEntry(item); toast(`Entrada movida para ${workflowLabel(target)}.`); await Promise.all([loadOverview(),loadEntries(),loadPublicationEntries()]); } catch(error){toast(error.message,true);} }
 async function restoreRevision(id,revision) { if(!confirm(`Repor a revisão ${revision}?`))return; try{const item=await api(`/api/editorial/entries/${encodeURIComponent(id)}/revisions/${revision}/restore`,{method:"POST",body:JSON.stringify({actor:actor(),comment:`Reposição da revisão ${revision}`})});renderPublicEntry(item);toast("Revisão reposta.");}catch(error){toast(error.message,true);} }
 async function waiveIssue(id,rule) { const reason=prompt("Justificação obrigatória para dispensar este erro:");if(reason===null)return;try{const item=await api(`/api/editorial/entries/${encodeURIComponent(id)}/issues/${encodeURIComponent(rule)}/waive`,{method:"POST",body:JSON.stringify({actor:actor(),reason})});renderPublicEntry(item);toast("Erro dispensado para esta versão da entrada.");}catch(error){toast(error.message,true);} }
@@ -536,6 +636,7 @@ async function openAuditEntry(event,id,lemma) {
   event.preventDefault();
   activateView("entries-panel",false);
   $("#query").value=lemma && lemma!=="Entrada sem lema" ? lemma : "";
+  resultsGeneratedAt="";
   setActiveAlphabet("");
   await loadEntries();
   await showEntry(id);
@@ -547,7 +648,7 @@ function renderValidationDashboard(report) {
   const occurrences=rules.reduce((total,item)=>total+Number(item.occurrences||0),0);
   $("#validation-dashboard-summary").textContent=`${n(occurrences)} ocorrências em ${n(report.validation_entries||0)} entradas distintas. Uma entrada pode ter mais do que um problema.`;
   $("#validation-rules").innerHTML=rules.length?`<table><thead><tr><th>Problema</th><th>Severidade</th><th>Ocorrências</th><th>Entradas afetadas</th><th>Exemplo</th><th>Ação</th></tr></thead><tbody>${rules.map(item=>`<tr><td><strong>${h(problemLabel(item.rule_code))}</strong><small class="validation-rule-code">${h(item.rule_code)}</small></td><td>${h({error:"Erro",warning:"Aviso",info:"Informação"}[item.severity]||item.severity)}</td><td>${n(item.occurrences)}</td><td>${n(item.entries)}</td><td>${h(item.example||"—")}</td><td><button type="button" class="secondary compact" data-problem-filter="${h(item.rule_code)}">Ver entradas</button></td></tr>`).join("")}</tbody></table>`:"<p>Sem problemas registados.</p>";
-  document.querySelectorAll("[data-problem-filter]").forEach(node=>node.addEventListener("click",async()=>{activateView("entries-panel",false);$("#query").value="";setActiveAlphabet("");$("#severity-filter").value=node.dataset.problemFilter;await loadEntries();}));
+  document.querySelectorAll("[data-problem-filter]").forEach(node=>node.addEventListener("click",async()=>{activateView("entries-panel",false);$("#query").value="";resultsGeneratedAt="";setActiveAlphabet("");$("#severity-filter").value=node.dataset.problemFilter;await loadEntries();}));
 }
 function toggleValidationDashboard(show=true){$("#validation-dashboard").hidden=!show;if(show&&lastAuditReport){renderValidationDashboard(lastAuditReport);$("#validation-dashboard").scrollIntoView({behavior:"smooth",block:"start"});}}
 async function loadAudit(){
@@ -571,4 +672,4 @@ $("#download-audit").addEventListener("click",()=>{if(!lastAuditReport){toast("A
 $("#download-audit-csv").addEventListener("click",()=>{if(!lastAuditReport){toast("Atualize primeiro o relatório.",true);return;}const rows=[["Data","Responsável","Entrada","Operação","Estado","Comentário"],...(lastAuditReport.recent_events||[]).map(event=>[formatDate(event.created_at),event.actor,event.subject_type==="entry"?`${event.subject_label||"Entrada sem lema"} [${event.subject_id}]`:event.subject_label||"—",auditOperationLabel(event),auditStateChange(event),auditComment(event)])];downloadAudit("\ufeff"+rows.map(row=>row.map(csvCell).join(";")).join("\r\n"),"text/csv;charset=utf-8","csv");});
 
 setHelpMode(helpMode);
-loadAccessSession().then(()=>Promise.all([loadOverview(),loadControlledValues()])).then(async()=>{const requested=new URLSearchParams(window.location.search).get("entry");if(requested){activateView("entries-panel",false);await loadEntries();await showEntry(requested);}}).catch(error=>toast(error.message,true));
+loadAccessSession().then(()=>Promise.all([loadOverview(),loadControlledValues()])).then(async()=>{const params=new URLSearchParams(window.location.search);const requested=params.get("entry");const hasSelection=requested||["q","resource","workflow","grammar","domain","issue_rule","generated_at"].some(key=>params.has(key));if(hasSelection){activateView("entries-panel",false);restoreEntryParams();await loadEntries();if(requested)await showEntry(requested);}}).catch(error=>toast(error.message,true));
